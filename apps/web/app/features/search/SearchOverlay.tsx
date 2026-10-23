@@ -1,8 +1,10 @@
+import { useSpace } from "../../lib/space";
+import { spacePath } from "../../lib/space-path";
 // Phone search: opens over the page from the bars' magnifier with the keyboard
 // already up — the field is focused inside the same tap, which iOS requires — and searches 全部动态
 // (/all?q=…). Below the field: this browser's recent searches, topics to browse and what is hot now.
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { Form, Link, useLocation, useNavigation } from "react-router";
+import { Form, Link, useLocation, useNavigation } from "../../lib/space-router";
 import type { SearchSuggestions } from "@aihot/contracts/site";
 import { IconClose, IconSearch } from "../../components/icons";
 import { inNav } from "../../components/shell/nav";
@@ -37,19 +39,25 @@ export function openSearch(query = "", trigger?: HTMLElement) {
   setOpen(true);
 }
 
-let suggestions: Promise<SearchSuggestions> | null = null;
+const suggestions = new Map<string, Promise<SearchSuggestions>>();
 
 /** Share only an ongoing read; the HTTP cache owns freshness and failed reads can be retried. */
-function loadSuggestions() {
-  suggestions ??= fetch('/api/site/search/suggestions')
+function loadSuggestions(slug: string | null) {
+  const key = slug ?? 'default';
+  let request = suggestions.get(key);
+  if (!request) {
+    request = fetch(spacePath('/api/site/search/suggestions', slug))
     .then(r => { if (!r.ok) throw new Error(String(r.status)); return r.json() as Promise<SearchSuggestions>; })
-    .finally(() => { suggestions = null; });
-  return suggestions;
+    .finally(() => { suggestions.delete(key); });
+    suggestions.set(key, request);
+  }
+  return request;
 }
 
 const RANK_COLOR = ["text-rank-1", "text-rank-2", "text-rank-3"];
 
 export function SearchOverlay() {
+  const { slug } = useSpace();
   const shown = useSyncExternalStore(subscribe, () => open, () => false);
   const panel = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
@@ -77,7 +85,7 @@ export function SearchOverlay() {
     let active = true;
     setHasText(!!input.current?.value);
     setMore(null);
-    void loadSuggestions().then(value => { if (active) setMore(value); }).catch(() => {});
+    void loadSuggestions(slug).then(value => { if (active) setMore(value); }).catch(() => {});
     // At the desktop breakpoint this layer is hidden by CSS; it must stop holding the page still too.
     const desktop = window.matchMedia("(min-width: 961px)");
     const onResize = () => { if (desktop.matches) close(); };
@@ -124,7 +132,7 @@ export function SearchOverlay() {
             e.preventDefault();
             return;
           }
-          addRecentSearch(q);
+          addRecentSearch(q, slug);
         }}
         className="flex h-14 shrink-0 items-center gap-1 pl-4 pr-1 pt-[env(safe-area-inset-top)]"
       >
@@ -170,13 +178,13 @@ export function SearchOverlay() {
             <section className="pt-3">
               <div className="flex items-center justify-between">
                 <h2 className="text-[13px] font-semibold text-ink-3">最近搜索</h2>
-                <button type="button" onClick={clearRecentSearches} className="-mr-2 h-11 px-2 text-[13px] text-ink-4">
+                <button type="button" onClick={() => clearRecentSearches(slug)} className="-mr-2 h-11 px-2 text-[13px] text-ink-4">
                   清除
                 </button>
               </div>
               <div className="mt-1.5 flex flex-wrap gap-2">
                 {recent.map((q) => (
-                  <Link key={q} to={`/all?q=${encodeURIComponent(q)}`} onClick={() => addRecentSearch(q)} className={`${chip} bg-surface text-ink-2 ring-1 ring-inset ring-line active:bg-bg-sunk`}>
+                  <Link key={q} to={`/all?q=${encodeURIComponent(q)}`} onClick={() => addRecentSearch(q, slug)} className={`${chip} bg-surface text-ink-2 ring-1 ring-inset ring-line active:bg-bg-sunk`}>
                     <span className="truncate">{q}</span>
                   </Link>
                 ))}

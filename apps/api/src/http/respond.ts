@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { POLICY } from "@aihot/site";
 import { NO_STORE, PUBLIC_API_CORS } from "@aihot/contracts/http-policy";
+import { publicationCacheKey } from "@aihot/backend/publication/context";
 import { siteUrl } from "@aihot/backend/publication/links";
 import type { JsonNotice } from "@aihot/backend/modules";
 
@@ -72,7 +73,7 @@ export function applyPublicHeaders(reply: FastifyReply, opts: PublicHeadersOptio
 }
 
 export function weakEtag(prefix: string, body: string): string {
-  return `W/"${prefix}-${createHash("sha256").update(body).digest("hex").slice(0, 16)}"`;
+  return `W/"${prefix}-${createHash("sha256").update(publicationCacheKey()).update("\0").update(body).digest("hex").slice(0, 16)}"`;
 }
 
 export function etagMatches(header: string | undefined, etag: string): boolean {

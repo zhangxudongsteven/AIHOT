@@ -1,7 +1,9 @@
+import { spacePath, spaceSlug } from "./lib/space-path";
+import { SpaceSwitcher } from "./components/shell/SpaceSwitcher";
 import {
   isRouteErrorResponse, Link, Links, Meta, Outlet, Scripts, ScrollRestoration, useLoaderData, useLocation, useNavigation, useRouteError, useRouteLoaderData,
   type ShouldRevalidateFunction,
-} from "react-router";
+} from "./lib/space-router";
 import type { SiteMeta } from "@aihot/contracts/site";
 import { SITE } from "@aihot/site";
 import { RingMark } from "@aihot/site/brand/Logo.tsx";
@@ -16,7 +18,7 @@ import { SearchOverlay } from "./features/search/SearchOverlay";
 import { BackToTop, NavigationProgress } from "./components/shell/Chrome";
 import { buttonClass } from "./components/ui/Controls";
 import { rememberPage, APPEARANCE_BOOT_SCRIPT, useAppearanceSync } from "./lib/local-state";
-import { apiGet } from "./lib/api.server";
+import { apiGet, loadOr404 } from "./lib/api.server";
 import { useHydratedFlag } from "./lib/hydration";
 import { titled } from "./lib/seo";
 import { webModules } from "./site-modules";
@@ -26,27 +28,30 @@ export const links: Route.LinksFunction = () => [
   { rel: "icon", type: "image/png", href: "/icon.png" },
   { rel: "apple-touch-icon", href: "/apple-icon.png" },
   { rel: "manifest", href: "/manifest.webmanifest" },
-  { rel: "alternate", type: "application/rss+xml", title: `${SITE.name} — 精选`, href: "/feed.xml" },
 ];
 
 /** The release rendering this document: once a newer one is deployed, a render error reloads the page (entry.client). */
 export async function loader({ request }: Route.LoaderArgs) {
   const release = process.env.AIHOT_RELEASE ?? null;
   try {
-    const meta = await apiGet<SiteMeta>("/api/site/meta", {
+    const read = spaceSlug(new URL(request.url).pathname) ? loadOr404<SiteMeta> : apiGet<SiteMeta>;
+    const meta = await read("/api/site/meta", {
+      request,
       headers: Object.assign({}, ...webModules().map((m) => m.root?.documentHeaders?.(request) ?? {})),
       signal: request.signal,
     });
     return { ...meta, release };
-  } catch {
+  } catch (error) {
+    if (spaceSlug(new URL(request.url).pathname)) throw error;
     return { changelogVersion: null, release };
   }
 }
 
-export const shouldRevalidate: ShouldRevalidateFunction = () => false;
+export const shouldRevalidate: ShouldRevalidateFunction = ({ currentUrl, nextUrl }) => spaceSlug(currentUrl.pathname) !== spaceSlug(nextUrl.pathname);
 
 export function Layout({ children }: { children: React.ReactNode }) {
   const site = useRouteLoaderData<typeof loader>("root");
+  const { pathname } = useLocation();
   const [documentRelease] = useState(site?.release ?? null);
   return (
     <html lang={SITE.locale} suppressHydrationWarning>
@@ -61,6 +66,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
         {webModules().map((m) => m.root?.bootScript && <script key={m.name} dangerouslySetInnerHTML={{ __html: m.root.bootScript }} />)}
         <Meta />
         <Links />
+        <link rel="alternate" type="application/rss+xml" title={`${SITE.name} — 精选`} href={spacePath("/feed.xml", spaceSlug(pathname))} />
       </head>
       <body>
         {children}
@@ -96,6 +102,7 @@ function SiteShell({ changelogVersion, children }: { changelogVersion: string | 
       <main id="main" className="min-w-0 flex-1 pb-[calc(72px+env(safe-area-inset-bottom))] lg:px-7 lg:pb-[72px] lg:pt-6">
         <div className="mx-auto w-full max-w-[640px] pl-[var(--gutter-l)] pr-[var(--gutter-r)] lg:max-w-[var(--page-max-wide)] lg:px-0">
           {webModules().map((m) => m.root?.Top && <m.root.Top key={m.name} />)}
+          <div className="lg:hidden"><SpaceSwitcher compact /></div>
           {children}
         </div>
       </main>
@@ -124,7 +131,7 @@ export default function App() {
   if (pathname === "/admin" || pathname.startsWith("/admin/")) return <Outlet />;
   return (
     <>
-      <SiteShell changelogVersion={meta.changelogVersion}>
+      <SiteShell key={spaceSlug(pathname) ?? "default"} changelogVersion={meta.changelogVersion}>
         <Outlet />
       </SiteShell>
       {webModules().map((m) => m.root?.Bottom && <m.root.Bottom key={m.name} />)}
@@ -152,9 +159,9 @@ export function ErrorBoundary() {
           {!notFound && <Link reloadDocument to={pathname + search + hash} className={buttonClass("primary")}>
             重新加载
           </Link>}
-          <Link reloadDocument to="/" className={buttonClass(notFound ? "primary" : "secondary")}>
+          <a href={site && "space" in site && site.space ? spacePath("/", site.space.slug) : "/"} className={buttonClass(notFound ? "primary" : "secondary")}>
             回到精选
-          </Link>
+          </a>
           <Link reloadDocument to="/all" className={buttonClass("secondary")}>
             浏览全部动态
           </Link>

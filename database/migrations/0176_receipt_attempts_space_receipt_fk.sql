@@ -1,0 +1,1 @@
+ALTER TABLE receipt_attempts ADD CONSTRAINT receipt_attempts_space_receipt_fk FOREIGN KEY (space_id, config_version, receipt_id) REFERENCES receipts (space_id, config_version, id) ON DELETE CASCADE NOT VALID;

@@ -9,6 +9,7 @@ import { groupingReset, reconcileMaterialSource } from "./provenance.ts";
 import { emit } from "../modules.ts";
 import { rebaseTranslation } from "./presentation.ts";
 import { audit } from "../audit.ts";
+import { DEFAULT_SPACE_ID, resolveSpaceContext, type SpaceContext } from "../spaces/context.ts";
 
 export interface MediaItem {
   kind: "image" | "video";
@@ -128,8 +129,9 @@ export async function fillPublicationTime(db: Db, articleId: string, claimed: Da
  * publication time: filled as a new revision, so nothing decided on the undated input stands (the
  * caller queues the returned articles). A date further ahead (an event page) stays refused.
  */
-export async function fillScheduledPublications(sourceId: string): Promise<string[]> {
-  const due = await sql<{ id: string }[]>`SELECT id FROM articles WHERE source_id = ${sourceId} AND published_at IS NULL
+export async function fillScheduledPublications(sourceId: string, context?: SpaceContext): Promise<string[]> {
+  const scope = await materialSourceContext(sourceId, sql, context);
+  const due = await sql<{ id: string }[]>`SELECT id FROM articles WHERE space_id = ${scope.spaceId} AND source_id = ${sourceId} AND published_at IS NULL
     AND published_at_claim > discovered_at + ${FUTURE_TOLERANCE_MS / 1000} * interval '1 second'
     AND published_at_claim <= discovered_at + ${SCHEDULED_AHEAD_MS / 1000} * interval '1 second'
     AND published_at_claim <= now() + ${FUTURE_TOLERANCE_MS / 1000} * interval '1 second'`;
@@ -193,7 +195,7 @@ export function identityKeyFor(m: MaterialInput): string {
  * its source; new entries still use URL identity, so another discovery of the same URL converges.
  * Existing duplicate rows remain untouched. Only collectors declaring an external ID call this.
  */
-export async function reuseExternalMaterialIdentities<C extends Pick<MaterialInput, "identityKey" | "raw">>(sourceId: string, candidates: C[], db: Db = sql): Promise<C[]> {
+export async function reuseExternalMaterialIdentities<C extends Pick<MaterialInput, "identityKey" | "raw">>(sourceId: string, candidates: C[], db: Db = sql, spaceId = DEFAULT_SPACE_ID): Promise<C[]> {
   const externalId = (raw: unknown): string | null => {
     const value = raw && typeof raw === "object" ? (raw as Record<string, unknown>).externalId : null;
     return typeof value === "string" && value.length > 0 ? value : typeof value === "number" && Number.isFinite(value) ? String(value) : null;
@@ -202,7 +204,7 @@ export async function reuseExternalMaterialIdentities<C extends Pick<MaterialInp
   if (ids.length === 0) return candidates;
   const rows = await db<{ external_id: string; identity_key: string }[]>`
     SELECT DISTINCT ON (raw->>'externalId') raw->>'externalId' AS external_id, identity_key
-    FROM articles WHERE source_id = ${sourceId} AND raw->>'externalId' = ANY(${ids}::text[])
+    FROM articles WHERE space_id = ${spaceId} AND source_id = ${sourceId} AND raw->>'externalId' = ANY(${ids}::text[])
     ORDER BY raw->>'externalId', discovered_at, id`;
   const known = new Map(rows.map(row => [row.external_id, row.identity_key]));
   return candidates.map(candidate => {
@@ -216,19 +218,27 @@ export async function reuseExternalMaterialIdentities<C extends Pick<MaterialInp
  * stored content really changes. Concurrent reports of the same material are serialised on the row,
  * so every change gets its own revision number. Returns whether processing is needed.
  */
-export async function upsertMaterial(m: MaterialInput, db: Db = sql): Promise<MaterialResult> {
-  const run = (tx: Db) => upsertIn(tx, m);
+export async function upsertMaterial(m: MaterialInput, db: Db = sql, context?: SpaceContext): Promise<MaterialResult> {
+  const run = async (tx: Db) => upsertIn(tx, m, await materialSourceContext(m.sourceId, tx, context));
   return "begin" in db ? (db as typeof sql).begin(run) : run(db);
 }
 
-async function lockMaterial(db: Db, identityKey: string) {
+/** Old callers are an explicit default-space adapter; another source needs a supplied context. */
+export async function materialSourceContext(sourceId: string, db: Db = sql, context?: SpaceContext): Promise<SpaceContext> {
+  const scope = await resolveSpaceContext(context?.spaceId ?? DEFAULT_SPACE_ID, context?.configVersion, db);
+  const [source] = await db`SELECT 1 FROM sources WHERE id = ${sourceId} AND space_id = ${scope.spaceId}`;
+  if (!source) throw new Error(`source ${sourceId} does not belong to space ${scope.spaceId}`);
+  return scope;
+}
+
+async function lockMaterial(db: Db, identityKey: string, spaceId: string) {
   const [existing] = await db<{ id: string; source_id: string; revision: number; content_hash: string | null; backfill: boolean; published_at: Date | null; publication_time: string | null; title: string; body_text: string | null; excerpt: string | null; participation_mode: string }[]>`
     SELECT a.id, a.source_id, a.revision, a.content_hash, a.backfill, a.published_at, a.publication_time, a.title, a.body_text, a.excerpt, s.participation_mode
-    FROM articles a JOIN sources s ON s.id = a.source_id WHERE a.identity_key = ${identityKey} FOR UPDATE OF a`;
+    FROM articles a JOIN sources s ON s.id = a.source_id WHERE a.space_id = ${spaceId} AND a.identity_key = ${identityKey} FOR UPDATE OF a`;
   return existing;
 }
 
-async function upsertIn(db: Db, m: MaterialInput): Promise<MaterialResult> {
+async function upsertIn(db: Db, m: MaterialInput, context: SpaceContext): Promise<MaterialResult> {
   m = { ...m,
     publishedAt: m.publishedAt && Number.isFinite(m.publishedAt.getTime()) ? m.publishedAt : null,
     sourceUpdatedAt: m.sourceUpdatedAt && Number.isFinite(m.sourceUpdatedAt.getTime()) ? m.sourceUpdatedAt : null,
@@ -240,33 +250,39 @@ async function upsertIn(db: Db, m: MaterialInput): Promise<MaterialResult> {
   const t = decideTimeline(m.publishedAt, discoveredAt, m.backfill);
   // Most listing entries are already stored. Lock and reuse those rows without attempting an
   // insert of their body and raw payload on every collection. The unique key still arbitrates
-  // concurrent first discoveries; after losing that insert, read and lock its winner.
-  let existing = await lockMaterial(db, identityKey);
+  // concurrent first discoveries, including the legacy global key before cutover. After losing
+  // that insert, read and lock only a winner in this space.
+  let existing = await lockMaterial(db, identityKey, context.spaceId);
   if (!existing) {
     const newId = m.id ?? newArticleId();
     const hash = contentHash({ title, bodyText: m.bodyText, excerpt: m.excerpt });
     const [inserted] = await db<{ id: string }[]>`
-      INSERT INTO articles (id, source_id, identity_key, url, title, author, language, published_at, published_at_claim, publication_time,
+      INSERT INTO articles (id, space_id, processing_config_version, source_id, identity_key, url, title, author, language, published_at, published_at_claim, publication_time,
         discovered_at, source_updated_at, timeline_at, backfill, backfill_reason, revision, content_hash, excerpt,
         body_text, body_html, body_status, media, x_post, raw)
-      VALUES (${newId}, ${m.sourceId}, ${identityKey}, ${m.url}, ${title}, ${m.author ?? null}, ${m.language ?? null},
+      VALUES (${newId}, ${context.spaceId}, ${context.configVersion}, ${m.sourceId}, ${identityKey}, ${m.url}, ${title}, ${m.author ?? null}, ${m.language ?? null},
         ${t.publishedAt}, ${m.publishedAt ?? null}, ${m.publishedAt ? m.publicationTime === undefined ? m.publishedAt.toISOString() : m.publicationTime : null}, ${discoveredAt}, ${m.sourceUpdatedAt ?? null}, ${t.timelineAt},
         ${t.backfill}, ${t.backfillReason}, 1, ${hash}, ${m.excerpt ?? null}, ${m.bodyText ?? null}, ${m.bodyHtml ?? null},
         ${m.bodyStatus ?? (m.bodyText ? "ok" : "pending")}, ${db.json((m.media ?? []) as never)},
         ${m.xPost ? db.json(m.xPost as never) : null}, ${m.raw === undefined ? null : db.json(m.raw as never)})
-      ON CONFLICT (identity_key) DO NOTHING RETURNING id`;
+      ON CONFLICT DO NOTHING RETURNING id`;
     if (inserted) {
-      await db`INSERT INTO article_revisions (article_id, revision, content_hash, title, body_text)
-               VALUES (${newId}, 1, ${hash}, ${title}, ${m.bodyText ?? null})`;
-      await db`INSERT INTO article_discoveries (article_id, source_id, via, discovered_at)
-               VALUES (${newId}, ${m.sourceId}, ${m.via}, ${discoveredAt}) ON CONFLICT DO NOTHING`;
+      await db`INSERT INTO article_revisions (article_id, space_id, revision, content_hash, title, body_text)
+               VALUES (${newId}, ${context.spaceId}, 1, ${hash}, ${title}, ${m.bodyText ?? null})`;
+      await db`INSERT INTO article_discoveries (article_id, space_id, source_id, via, discovered_at)
+               VALUES (${newId}, ${context.spaceId}, ${m.sourceId}, ${m.via}, ${discoveredAt}) ON CONFLICT DO NOTHING`;
       await reconcileMaterialSource(db, newId, { sourceId: m.sourceId, author: m.author });
       return { articleId: newId, created: true, revised: false, backfill: t.backfill };
     }
-    existing = await lockMaterial(db, identityKey);
+    existing = await lockMaterial(db, identityKey, context.spaceId);
+    if (!existing) {
+      const [foreign] = await db`SELECT 1 FROM articles WHERE identity_key = ${identityKey} AND space_id <> ${context.spaceId} LIMIT 1`;
+      if (foreign) throw new Error("Material identity belongs to another space; complete the space identity cutover before collecting the same identity across spaces");
+      throw new Error(`Material ID ${newId} is already in use by another identity`);
+    }
   }
-  await db`INSERT INTO article_discoveries (article_id, source_id, via, discovered_at)
-           VALUES (${existing!.id}, ${m.sourceId}, ${m.via}, ${discoveredAt}) ON CONFLICT DO NOTHING`;
+  await db`INSERT INTO article_discoveries (article_id, space_id, source_id, via, discovered_at)
+           VALUES (${existing!.id}, ${context.spaceId}, ${m.sourceId}, ${m.via}, ${discoveredAt}) ON CONFLICT DO NOTHING`;
   const unchanged: MaterialResult = { articleId: existing!.id, created: false, revised: false, backfill: existing!.backfill };
   // Configuration may have gained a verified publisher since this same discovery channel last
   // saw the URL. Reconcile before accepting any of that channel's material changes.
@@ -307,8 +323,8 @@ async function upsertIn(db: Db, m: MaterialInput): Promise<MaterialResult> {
     // every article a source still lists back to paid analysis. The baseline joins the history, so
     // a later return to it is recognised as a version seen before.
     await db`UPDATE articles SET content_hash = ${next}, excerpt = coalesce(excerpt, ${m.excerpt ?? null}) WHERE id = ${existing!.id}`;
-    await db`INSERT INTO article_revisions (article_id, revision, content_hash, title, body_text)
-             VALUES (${existing!.id}, ${existing!.revision}, ${next}, ${title}, ${bodyText}) ON CONFLICT DO NOTHING`;
+    await db`INSERT INTO article_revisions (article_id, space_id, revision, content_hash, title, body_text)
+             VALUES (${existing!.id}, ${context.spaceId}, ${existing!.revision}, ${next}, ${title}, ${bodyText}) ON CONFLICT DO NOTHING`;
     return unchanged;
   }
   // A version this article already had is no new material (listings that alternate between two
@@ -365,14 +381,14 @@ export async function updatePresentation(db: Db, articleId: string, next: { html
  * grouping, the "adds value" check). The caller holds the row lock and has found the content changed.
  */
 export async function reviseMaterial(db: Db, articleId: string, revision: { set: ReturnType<typeof sql>; hash: string; title: string; bodyText: string | null }): Promise<void> {
-  const [row] = await db<{ revision: number }[]>`
+  const [row] = await db<{ revision: number; space_id: string }[]>`
     UPDATE articles SET ${revision.set}, revision = revision + 1, content_hash = ${revision.hash}, ${groupingReset()},
       processing_state = 'new', processing_attempts = 0, processing_retry_at = NULL, processing_error = NULL, processing_queued_at = NULL,
       updated_at = now()
     WHERE id = ${articleId}
-    RETURNING revision`;
-  await db`INSERT INTO article_revisions (article_id, revision, content_hash, title, body_text)
-           VALUES (${articleId}, ${row!.revision}, ${revision.hash}, ${revision.title}, ${revision.bodyText})`;
+    RETURNING revision, space_id`;
+  await db`INSERT INTO article_revisions (article_id, space_id, revision, content_hash, title, body_text)
+           VALUES (${articleId}, ${row!.space_id}, ${row!.revision}, ${revision.hash}, ${revision.title}, ${revision.bodyText})`;
   // Only withdraw an existing projection; the first publication still belongs to completed analysis.
   if ((await db`SELECT 1 FROM publications WHERE article_id = ${articleId}`).length) {
     const published = await publishArticleTx(db as Tx, articleId);

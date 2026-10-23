@@ -1,6 +1,7 @@
 // Failure cases: pre-parsed JSON bypasses the SDK's limit; insignificant whitespace disappears
 // when JSON is re-serialized; multi-byte text is counted as characters; chunked input has no length.
 import "./setup.ts";
+import { closeDb } from "@aihot/backend/db";
 import assert from "node:assert/strict";
 import { request } from "node:http";
 import { after, test } from "node:test";
@@ -11,7 +12,7 @@ import { buildApp } from "../apps/api/src/app.ts";
 const LIMIT = 256 * 1024;
 const app = Fastify({ bodyLimit: 10 * 1024 * 1024 });
 registerMcp(app);
-after(() => app.close());
+after(async () => { await app.close(); await closeDb(); });
 const headers = { host: "localhost", "content-type": "application/json", accept: "application/json, text/event-stream" };
 const initialize = (name: string) => JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {
   protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name, version: "1.0.0" },

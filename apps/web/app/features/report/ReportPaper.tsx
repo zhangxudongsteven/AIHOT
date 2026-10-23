@@ -5,9 +5,10 @@
 // Rules are hairlines in two weights: line-strong closes the masthead and underlines a page's heading
 // and the neighbours; line parts stories, columns and list rows. Nothing is set in solid ink. Stories
 // sit in rows of two whose rules run across the page, each story as tall as its neighbour.
+import { useSpace } from "../../lib/space";
 import { IntentLink } from "../../components/ui/IntentLink";
 import { useState, type ReactNode } from "react";
-import { Link } from "react-router";
+import { Link } from "../../lib/space-router";
 import { REPORT_NAMES, type ReportCitation, type ReportDetail, type ReportNavigationEntry } from "@aihot/contracts/site";
 import { REPORTS, SITE, subjectAfter, withSubject } from "@aihot/site";
 import { Badge } from "../../components/ui/Badge";
@@ -29,25 +30,26 @@ const LINK = "inline-flex min-h-7 items-center gap-0.5 font-medium transition-co
 const before = (phrase: string, noun: string) => phrase.slice(0, -noun.length);
 
 function Masthead({ report, index, quiet }: { report: ReportDetail; index: ReportNavigationEntry[]; quiet: boolean }) {
+  const { space, isDefault, reportSettings } = useSpace();
   const mark = dateMark(report.kind, report.key);
   const label = REPORT_NAMES[report.kind];
   return (
     <header className="pt-5 lg:pt-0">
       <div className="flex items-center justify-between gap-4 text-[12px] text-ink-4">
         <span className="num">{dateLine(report.kind, report.key)}</span>
-        <span className="hidden tracking-[0.3em] @[640px]:inline">{MOTTO[report.kind]}</span>
-        <span>{EDITION[report.kind]}</span>
+        <span className="hidden tracking-[0.3em] @[640px]:inline">{isDefault ? MOTTO[report.kind] : `${space?.name ?? ""} · ${label}`}</span>
+        <span>{reportSettings ? `${reportSettings.editionWhen[report.kind]} 出刊` : EDITION[report.kind]}</span>
       </div>
 
       <div className="flex items-stretch justify-between gap-5 py-6 @[880px]:gap-10 @[880px]:py-8">
         <div className="flex min-w-0 flex-col justify-center">
           <h1 id="report-start" className="scroll-mt-[calc(var(--bar-h)+1.5rem)]">
             <span className="sr-only">
-              {before(withSubject(label), label)}{label} · {dateLine(report.kind, report.key)}
+              {isDefault ? before(withSubject(label), label) : `${space?.name ?? ""} `}{label} · {dateLine(report.kind, report.key)}
             </span>
             <Nameplate which={report.kind} className="block h-[44px] w-auto @[520px]:h-[58px] @[880px]:h-[74px] @[1040px]:h-[84px]" />
           </h1>
-          <p className="mt-3 text-[11.5px] tracking-[0.36em] text-ink-4 @[880px]:mt-4 @[880px]:text-[12.5px]">{REPORTS.imprint}</p>
+          <p className="mt-3 text-[11.5px] tracking-[0.36em] text-ink-4 @[880px]:mt-4 @[880px]:text-[12.5px]">{isDefault ? REPORTS.imprint : "公开来源 · 频道精选"}</p>
         </div>
         {/* 报眼: the box beside the nameplate, as a Chinese daily sets it: the issue and the date in the
             nameplate's dots, and on wider paper the issue calendar beside them. */}
@@ -69,7 +71,7 @@ function Masthead({ report, index, quiet }: { report: ReportDetail; index: Repor
         <div aria-hidden="true" className="border-t border-line-strong" />
       ) : (
         <div className="flex flex-wrap items-baseline gap-x-8 gap-y-1.5 border-y border-line-strong py-3">
-          {metricItems(report.metrics).map((m) => (
+          {metricItems(report.metrics, reportSettings?.releaseUnit).map((m) => (
             <span key={m.unit} className="inline-flex items-baseline gap-1.5 whitespace-nowrap">
               <span className="num text-[22px] font-bold leading-none tracking-[-0.02em] text-ink @[880px]:text-[24px]">{m.value}</span>
               <span className="text-[12px] text-ink-4">{m.unit}</span>
@@ -405,7 +407,8 @@ export function SectionPage({ id, no, label, children }: { id: string; no?: numb
 const COLUMNS = "@[760px]:columns-2 @[760px]:gap-x-12 @[760px]:[column-rule:1px_solid_var(--line)]";
 
 function Neighbours({ report, index }: { report: ReportDetail; index: ReportNavigationEntry[] }) {
-  const titleOf = (key: string) => index.find((e) => e.key === key)?.title ?? `${withSubject(REPORT_NAMES[report.kind])} · ${key}`;
+  const { isDefault } = useSpace();
+  const titleOf = (key: string) => index.find((e) => e.key === key)?.title ?? `${isDefault ? withSubject(REPORT_NAMES[report.kind]) : REPORT_NAMES[report.kind]} · ${key}`;
   const cell = "group flex min-w-0 flex-col py-6";
   const title = "mt-2.5 line-clamp-2 text-[16px] font-bold leading-[1.5] text-ink transition-colors group-hover:text-accent @[880px]:text-[18px]";
   return (
@@ -435,18 +438,19 @@ function Neighbours({ report, index }: { report: ReportDetail; index: ReportNavi
 }
 
 function History({ report, index }: { report: ReportDetail; index: ReportNavigationEntry[] }) {
+  const { space, isDefault } = useSpace();
   const others = index.filter((e) => e.key !== report.key).slice(0, 12);
   if (others.length === 0) return null;
   const label = REPORT_NAMES[report.kind];
   return (
     <section id="report-history" className="scroll-mt-[calc(var(--bar-h)+1.5rem)] pt-12">
-      <Kicker>{before(subjectAfter("往期", label), label)}{label}</Kicker>
+      <Kicker>{isDefault ? before(subjectAfter("往期", label), label) : "往期"}{label}</Kicker>
       <ul className="mt-3">
         {others.map((e) => (
           <li key={e.key}>
             <Link to={reportPath(report.kind, e.key)} className="group flex items-baseline gap-4 border-b border-line py-3">
               <span className="num w-[76px] shrink-0 text-[12.5px] text-ink-4">{e.key}</span>
-              <span className="min-w-0 flex-1 truncate text-[14px] text-ink-2 transition-colors group-hover:text-accent">{e.title ?? `${SITE.name} ${REPORT_NAMES[report.kind]} · ${e.key}`}</span>
+              <span className="min-w-0 flex-1 truncate text-[14px] text-ink-2 transition-colors group-hover:text-accent">{e.title ?? `${space?.name ?? SITE.name} ${REPORT_NAMES[report.kind]} · ${e.key}`}</span>
             </Link>
           </li>
         ))}
@@ -467,6 +471,7 @@ export function reportOutline(report: ReportDetail): OutlineEntry[] {
 }
 
 export function ReportPaper({ report, index }: { report: ReportDetail; index: ReportNavigationEntry[] }) {
+  const { space } = useSpace();
   const daily = report.kind === "daily";
   const leadStory = leadStoryOf(report);
   const pages = pagesOf(report, leadStory);
@@ -530,7 +535,7 @@ export function ReportPaper({ report, index }: { report: ReportDetail; index: Re
       <footer className="py-10 text-center">
         <div className="text-[13px] font-semibold tracking-[0.6em] text-ink-4">（本期完）</div>
         <p className="mt-3 text-[12px] text-ink-4">
-          {`${SITE.name} `}{REPORT_NAMES[report.kind]}根据公开报道自动{daily ? "整理" : "汇总"}，每条都附原文 ·{" "}
+          {`${space?.name ?? SITE.name} `}{REPORT_NAMES[report.kind]}根据公开报道自动{daily ? "整理" : "汇总"}，每条都附原文 ·{" "}
           <Link to={daily ? "/daily/archive" : "#report-history"} viewTransition={daily} className="font-medium text-ink-3 transition-colors hover:text-accent">
             {daily ? "日报合订本" : `往期${REPORT_NAMES[report.kind]}`}
           </Link>

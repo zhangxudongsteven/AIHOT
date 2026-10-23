@@ -1,5 +1,6 @@
+import { useSpaceFetch } from "../../lib/space";
 import { useEffect, useRef, useState } from "react";
-import { Link } from "react-router";
+import { Link } from "../../lib/space-router";
 import type { StoryFollowup, StoryFollowupsResponse, StoryRef } from "@aihot/contracts/site";
 import { MoreLink } from "../../components/ui/Page";
 import { relativeTime } from "../../lib/format";
@@ -9,6 +10,7 @@ import { relativeTime } from "../../lib/format";
  * the whole event. Loaded after the page so the article renders without waiting for it.
  */
 export function StoryFollowups({ story, currentId }: { story: StoryRef; currentId: string }) {
+  const spaceFetch = useSpaceFetch();
   const [items, setItems] = useState<StoryFollowup[] | null>(null);
   const [more, setMore] = useState(false);
   const anchor = useRef<HTMLDivElement>(null);
@@ -19,7 +21,7 @@ export function StoryFollowups({ story, currentId }: { story: StoryRef; currentI
     const load = () => {
       if (started) return;
       started = true;
-      fetch(`/api/site/stories/${encodeURIComponent(story.publicId)}/followups`, { signal: controller.signal })
+      spaceFetch(`/api/site/stories/${encodeURIComponent(story.publicId)}/followups`, { signal: controller.signal })
         .then((r) => (r.ok ? r.json() : null))
         .then((body: StoryFollowupsResponse | null) => {
           if (!body || controller.signal.aborted) return;
@@ -35,7 +37,7 @@ export function StoryFollowups({ story, currentId }: { story: StoryRef; currentI
     return () => { observer?.disconnect(); controller.abort(); };
   }, [story.publicId, currentId]);
   return <div ref={anchor}>
-    <noscript><a href={`/story/${story.publicId}`}>查看事件全部后续</a></noscript>
+    <noscript><Link to={`/story/${story.publicId}`}>查看事件全部后续</Link></noscript>
     {items && items.length > 0 && <Followups items={items} more={more} story={story} />}
   </div>;
 }

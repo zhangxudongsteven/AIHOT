@@ -1,3 +1,4 @@
+import { useSpace } from "../../lib/space";
 // Small building blocks shared by feed items, detail pages and lists.
 import { useState } from "react";
 import type { FeedItemSummary, MediaView } from "@aihot/contracts/site";
@@ -58,13 +59,14 @@ type Starrable = Pick<FeedItemSummary, "id" | "title" | "summary" | "source" | "
 
 /** Whether an item is in this browser's 收藏, a toggle, and a counter that bumps when it is added. */
 export function useStar(item: Starrable) {
+  const { slug } = useSpace();
   const on = useIsStarred(item.id);
   const [pulse, setPulse] = useState(0);
   const toggle = () => {
     const added = toggleStar({
       id: item.id, title: item.title, summary: item.summary, sourceName: item.source.name,
       publishedAt: item.publishedAt, score: item.score, aiSelected: item.selected,
-    });
+    }, slug);
     if (added) setPulse((p) => p + 1);
   };
   return { on, toggle, pulse };

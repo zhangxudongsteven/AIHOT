@@ -1,6 +1,7 @@
 // Dajiala (极致了) WeChat official-account data. Paid per request (post_history ¥0.14, article_detail
 // ¥0.03); every call goes through receipts and the budget, and the provider's own cost_money is kept
 // as the actual cost. Docs: https://s.apifox.cn/410674f9-f451-4b4f-957a-5f54f243bc83
+import type { SpaceContext } from "../spaces/context.ts";
 import { credential } from "../config.ts";
 import { guardedFetch } from "../lib/http-fetch.ts";
 import { assertAccepted, paidRequest, ProviderRejectedError, type CallOutcome } from "./receipts.ts";
@@ -57,10 +58,10 @@ function outcomeOf(json: { code?: number; msg?: string; cost_money?: number }, l
 }
 
 /** Latest posts of one account (first page, newest first). `window` buckets the receipt identity. */
-export async function mpHistory(ghid: string, opts: { subject: string; window: string }): Promise<MpHistory> {
+export async function mpHistory(ghid: string, opts: { context?: SpaceContext; subject: string; window: string }): Promise<MpHistory> {
   const { url, key } = base();
   const receipt = await paidRequest(
-    { service: "dajiala", purpose: "mp_history", subject: opts.subject, identity: { ghid, window: opts.window }, requestSummary: { ghid } },
+    { context: opts.context, service: "dajiala", purpose: "mp_history", subject: opts.subject, identity: { ghid, window: opts.window }, requestSummary: { ghid } },
     async () => {
       const res = await guardedFetch(`${url}/fbmain/monitor/v3/post_history`, {
         method: "POST",
@@ -81,10 +82,10 @@ export async function mpHistory(ghid: string, opts: { subject: string; window: s
 }
 
 /** Plain-text body of one article (mode 1: text with image markers). */
-export async function mpArticle(articleUrl: string, opts: { subject: string; identity: string }): Promise<MpArticle> {
+export async function mpArticle(articleUrl: string, opts: { context?: SpaceContext; subject: string; identity: string }): Promise<MpArticle> {
   const { url, key } = base();
   const receipt = await paidRequest(
-    { service: "dajiala", purpose: "mp_article", subject: opts.subject, identity: { article: opts.identity }, requestSummary: { url: articleUrl } },
+    { context: opts.context, service: "dajiala", purpose: "mp_article", subject: opts.subject, identity: { article: opts.identity }, requestSummary: { url: articleUrl } },
     async () => {
       const res = await guardedFetch(`${url}/fbmain/monitor/v3/article_detail?${new URLSearchParams({ url: articleUrl, key, mode: "1", verifycode: "" })}`, {
         redirectPolicy: "same-origin",

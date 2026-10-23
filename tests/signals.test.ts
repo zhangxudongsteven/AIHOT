@@ -36,7 +36,7 @@ for (const name of ["DASHSCOPE_API_KEY", "DEEPSEEK_API_KEY"]) process.env[name] 
 
 async function job(articleId: string) {
   const [j] = await sql<{ name: string; priority: number; data: { signalOnly?: boolean } }[]>`
-    SELECT name, priority, data FROM pgboss.job WHERE singleton_key = ${articleId} ORDER BY created_on DESC LIMIT 1`;
+    SELECT name, priority, data FROM pgboss.job WHERE data->>'articleId' = ${articleId} ORDER BY created_on DESC LIMIT 1`;
   return j ?? null;
 }
 

@@ -1,6 +1,7 @@
+import { publicationCategoryKeys, publicationApiCategory } from "./taxonomy.ts";
 // Public read layer, item level. Every exit (site API, v1, RSS, MCP, sitemap) reads
 // items through these columns and views; which rows are public is decided by scope.ts.
-import { CATEGORY_KEYS, toPublicApiCategory, type CategoryKey, type ChannelKey, type PublicApiCategoryKey } from "@aihot/contracts/taxonomy";
+import { type CategoryKey, type ChannelKey, type PublicApiCategoryKey } from "@aihot/contracts/taxonomy";
 import type { FeedItemSummary, ItemSummary, MediaView, XPostView } from "@aihot/contracts/site";
 import { POLICY } from "@aihot/site";
 import { sql, type Db } from "../db.ts";
@@ -65,14 +66,24 @@ export const API_ITEM_COLUMNS = sql`
   p.published_at, p.discovered_at, p.category, p.score, (p.selected AND p.seat) AS selected, p.reason`;
 export const API_ITEM_FROM = sql`FROM publications p JOIN sources s ON s.id = p.source_id`;
 
+/** Source-provided Chinese text survives configuration changes. Null model versions are only the
+ * default channel's pre-upgrade translations; every new generated result names its configuration. */
+export const TRANSLATION_JOINS = sql`
+  LEFT JOIN translations tr ON tr.article_id = p.article_id AND tr.lang = 'zh' AND tr.revision >= a.revision
+    AND (tr.origin = 'source' OR (tr.config_version IS NULL AND p.space_id = 'default')
+      OR tr.config_version = (SELECT active_config_version FROM spaces WHERE id = p.space_id))
+  LEFT JOIN quote_translations qt ON qt.space_id = p.space_id AND p.channel = 'x'
+    AND qt.tweet_id = substring(a.x_post->'quoted'->>'url' from '/status/([0-9]+)')
+    AND ((qt.config_version IS NULL AND p.space_id = 'default')
+      OR qt.config_version = (SELECT active_config_version FROM spaces WHERE id = p.space_id))`;
+
 /** A translation of an older revision is left out: the original changed after it (the worker translates it again). */
 export const ITEM_FROM = sql`
   FROM publications p
   JOIN sources s ON s.id = p.source_id
   JOIN articles a ON a.id = p.article_id
-  LEFT JOIN stories st ON st.id = p.story_id AND st.merged_into IS NULL
-  LEFT JOIN translations tr ON tr.article_id = p.article_id AND tr.lang = 'zh' AND tr.revision >= a.revision
-  LEFT JOIN quote_translations qt ON p.channel = 'x' AND qt.tweet_id = substring(a.x_post->'quoted'->>'url' from '/status/([0-9]+)')`;
+  LEFT JOIN stories st ON st.id = p.story_id AND st.merged_into IS NULL AND st.space_id = p.space_id
+  ${TRANSLATION_JOINS}`;
 
 export function channelCondition(channel: ChannelKey | null | undefined) {
   if (!channel || channel === "all") return sql``;
@@ -89,7 +100,7 @@ export function categoryCondition(category: CategoryKey | null | undefined) {
 /** The public API's, RSS's and MCP's filter: every category the site publishes as this one (PUBLIC_CATEGORIES). */
 export function publicCategoryCondition(category: PublicApiCategoryKey | null | undefined) {
   if (!category) return sql``;
-  return sql`AND p.category IN ${sql(CATEGORY_KEYS.filter((k) => toPublicApiCategory(k) === category))}`;
+  return sql`AND p.category IN ${sql(publicationCategoryKeys().filter((k) => publicationApiCategory(k) === category))}`;
 }
 
 export function tagCondition(tag: string | null | undefined) {

@@ -2,7 +2,9 @@
 // errors are the usual v1 Problem JSON. New abilities become new addresses listed in the guide, which
 // agents read without updating.
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { PUBLIC_API_CATEGORY_KEYS, type PublicApiCategoryKey } from "@aihot/contracts/taxonomy";
+import { type PublicApiCategoryKey } from "@aihot/contracts/taxonomy";
+import { publicationSpaceId } from "@aihot/backend/publication/context";
+import { publicationPublicCategoryKeys } from "@aihot/backend/publication/taxonomy";
 import { isValidDate } from "@aihot/contracts/time";
 import { agentGuide, dailyAnswer, hotAnswer, latestAnswer, periodAnswer, searchAnswer, searchItems, storyAnswer } from "@aihot/backend/publication/agent";
 import { v1Items } from "@aihot/backend/publication/v1";
@@ -22,7 +24,7 @@ function markdown(req: FastifyRequest, reply: FastifyReply, text: string, etagPr
 function listParams(q: Record<string, string>) {
   return {
     window: enumParam(q.window, "window", ["24h", "7d"] as const, "24h"),
-    category: q.category === undefined ? null : enumParam<PublicApiCategoryKey>(q.category, "category", PUBLIC_API_CATEGORY_KEYS, PUBLIC_API_CATEGORY_KEYS[0]),
+    category: q.category === undefined ? null : enumParam<PublicApiCategoryKey>(q.category, "category", publicationPublicCategoryKeys() as PublicApiCategoryKey[], publicationPublicCategoryKeys()[0] as PublicApiCategoryKey),
     limit: intParam(q.limit, "limit", 1, 30, 10),
   };
 }
@@ -105,6 +107,7 @@ export function registerAgent(app: FastifyInstance) {
   // The modules' abilities, each answered at its own address.
   for (const ability of serverModules().flatMap((m) => m.agent?.abilities ?? [])) {
     app.get(`/api/v1/agent${ability.path}`, publicHandler(async (req, reply) => {
+      if (publicationSpaceId() !== "default") return sendProblem(req, reply, { status: 404, code: "not_found", detail: "This ability is not available for this channel." });
       strictQuery(req, []);
       return markdown(req, reply, await ability.answer(), ability.etagPrefix, ability.cacheControl);
     }));

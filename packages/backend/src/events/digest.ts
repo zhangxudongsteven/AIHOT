@@ -1,5 +1,6 @@
 // Story digest: rewritten incrementally as reports arrive; contradictions with earlier reporting are
 // stated explicitly. Latest progress is bound to a current public report, not generated independently.
+import { eventContext, assertEventReferences, type EventOptions } from "./scope.ts";
 import { z } from "zod";
 import { modelFor } from "../editorial/models.ts";
 import { beijingDate, beijingTime } from "@aihot/contracts/time";
@@ -7,7 +8,7 @@ import { sql } from "../db.ts";
 import { chatJson } from "../providers/llm.ts";
 import { completeReceipt } from "../providers/receipts.ts";
 import { digestFactEvidence, digestInputsHash, digestReports, type DigestReport } from "../publication/story-evidence.ts";
-import { promptText, promptVersion } from "../editorial/prompts.ts";
+import { promptText, promptVersion, promptVersionFor } from "../editorial/prompts.ts";
 
 export const DIGEST_PROMPT_VERSION = promptVersion("story-digest");
 
@@ -41,14 +42,15 @@ export function buildStoryDigestInput(story: { title: string; digest: string | n
  * as they are now with the current prompt, as after a correction: a new wording otherwise reaches a story
  * only when its reports change.
  */
-export async function composeStoryDigest(storyId: number, opts: { rewrite?: boolean } = {}): Promise<{ updated: boolean; version?: number }> {
+export async function composeStoryDigest(storyId: number, opts: EventOptions & { rewrite?: boolean } = {}): Promise<{ updated: boolean; version?: number }> {
+  const context = await eventContext(opts);
   const [story] = await sql<{ id: number; title: string; digest: string | null; version: number; origin: string }[]>`
-    SELECT id, title, digest, version, origin FROM stories WHERE id = ${storyId} AND merged_into IS NULL`;
+    SELECT id, title, digest, version, origin FROM stories WHERE id = ${storyId} AND space_id = ${context.spaceId} AND merged_into IS NULL`;
   if (!story) return { updated: false };
-  const reports = await digestReports(sql, [storyId]);
+  const reports = await digestReports(sql, [storyId], new Date(), { context });
   if (reports.length === 0) {
     const cleared = await sql`UPDATE stories SET digest = NULL, latest = NULL, digest_updated_at = NULL, updated_at = now()
-      WHERE id = ${storyId} AND version = ${story.version} AND merged_into IS NULL AND (digest IS NOT NULL OR latest IS NOT NULL)`;
+      WHERE id = ${storyId} AND space_id = ${context.spaceId} AND version = ${story.version} AND merged_into IS NULL AND (digest IS NOT NULL OR latest IS NOT NULL)`;
     return { updated: cleared.count > 0 };
   }
   reports.sort(byReportTime);
@@ -56,7 +58,7 @@ export async function composeStoryDigest(storyId: number, opts: { rewrite?: bool
   // What this version is written from: the reports and what they currently say (corrections included).
   const inputsHash = digestInputsHash(reports);
   const [last] = await sql<{ article_ids: string[]; inputs_hash: string | null; digest: string; receipt_id: number | null }[]>`
-    SELECT article_ids, inputs_hash, digest, receipt_id FROM story_digests WHERE story_id = ${storyId} ORDER BY version DESC LIMIT 1`;
+    SELECT article_ids, inputs_hash, digest, receipt_id FROM story_digests WHERE story_id = ${storyId} AND space_id = ${context.spaceId} ORDER BY version DESC LIMIT 1`;
   const sameReports = !!last && JSON.stringify([...last.article_ids].sort()) === JSON.stringify(ids);
   if (!opts.rewrite && story.digest !== null && sameReports && last!.inputs_hash === inputsHash) return { updated: false };
   // Same reports, different content: an editor corrected one. A report gone from the story (withdrawn,
@@ -69,26 +71,27 @@ export async function composeStoryDigest(storyId: number, opts: { rewrite?: bool
   // A withdrawal clears the public projection but retains its history. Restoring exactly the same
   // evidence reuses that digest through the normal version/input checks, without another model call.
   const res = !opts.rewrite && last?.inputs_hash === inputsHash ? { data: { title: "", digest: last.digest }, receiptId: last.receipt_id } : await chatJson({
-    model: await modelFor("digest"), purpose: "story_digest", subject: `story:${storyId}@${ids.length}`, promptVersion: DIGEST_PROMPT_VERSION,
-    system: DIGEST_SYSTEM, user, schema: DigestSchema, ...DIGEST_SAMPLING,
+    context, model: await modelFor("digest", context), purpose: "story_digest", subject: `story:${storyId}@${ids.length}`, promptVersion: promptVersionFor(context, "story-digest"),
+    system: promptText("story-digest", {}, context), user, schema: DigestSchema, ...DIGEST_SAMPLING,
   });
   const version = story.version + 1;
   const updated = await sql.begin(async (tx) => {
     const [current] = await tx<{ version: number; merged_into: number | null }[]>`
-      SELECT version, merged_into FROM stories WHERE id = ${storyId} FOR UPDATE`;
+      SELECT version, merged_into FROM stories WHERE id = ${storyId} AND space_id = ${context.spaceId} FOR UPDATE`;
     // Report corrections, withdrawals and membership changes do not necessarily bump the story
     // version. Compare the same input identity again after the model returns.
-    if (!current || current.version !== story.version || current.merged_into !== null || digestInputsHash(await digestReports(tx, [storyId])) !== inputsHash) {
+    if (!current || current.version !== story.version || current.merged_into !== null || digestInputsHash(await digestReports(tx, [storyId], new Date(), { context })) !== inputsHash) {
       // A paid response remains reusable even when an editor or another digest won the race.
       if (res.receiptId !== null) await completeReceipt(tx, res.receiptId);
       return false;
     }
-    await tx`INSERT INTO story_digests (story_id, version, digest, latest, receipt_id, article_ids, inputs_hash)
-             VALUES (${storyId}, ${version}, ${res.data.digest}, ${latest}, ${res.receiptId}, ${ids}, ${inputsHash})`;
+    await assertEventReferences(tx, context.spaceId, { articles: ids, stories: [storyId] });
+    await tx`INSERT INTO story_digests (space_id, story_id, version, digest, latest, receipt_id, article_ids, inputs_hash)
+             VALUES (${context.spaceId}, ${storyId}, ${version}, ${res.data.digest}, ${latest}, ${res.receiptId}, ${ids}, ${inputsHash})`;
     await tx`UPDATE stories SET digest = ${res.data.digest}, latest = ${latest}, digest_updated_at = now(),
                title = CASE WHEN origin = 'manual' OR ${res.data.title} = '' THEN title ELSE ${res.data.title} END,
                version = ${version}, updated_at = now()
-             WHERE id = ${storyId}`;
+             WHERE id = ${storyId} AND space_id = ${context.spaceId}`;
     if (res.receiptId !== null) await completeReceipt(tx, res.receiptId);
     return true;
   });

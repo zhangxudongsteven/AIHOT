@@ -27,19 +27,19 @@ export function firmTie(d: Fragment, c: Fragment) {
 }
 
 /** One row per known bridge report, with its current validity. Missing history proves no revocation. */
-export function relatedEvidence(story: Fragment, other: Fragment, now: Date) {
+export function relatedEvidence(story: Fragment, other: Fragment, now: Date, spaceId = "default") {
   return sql`(
     WITH judged AS (
       SELECT DISTINCT d.id, d.article_id, d.fact_id FROM facts own
       JOIN grouping_decisions d ON d.fact_id = own.id
       CROSS JOIN LATERAL jsonb_array_elements(d.candidates) c
-      JOIN facts candidate ON candidate.id = (c->>'id')::bigint
-      WHERE own.story_id IN (${story}, ${other}) AND ${firmTie(sql`d`, sql`c`)}
+      JOIN facts candidate ON candidate.id = (c->>'id')::bigint AND candidate.space_id = own.space_id
+      WHERE own.space_id = ${spaceId} AND own.story_id IN (${story}, ${other}) AND ${firmTie(sql`d`, sql`c`)}
         AND ((own.story_id = ${story} AND candidate.story_id = ${other})
           OR (own.story_id = ${other} AND candidate.story_id = ${story}))),
     latest AS (${latestJudgements(sql`d.article_id IN (SELECT article_id FROM judged)`)})
     SELECT j.article_id, bool_or((j.id = latest.id
-      AND ${storyReportCondition(now)} AND NOT ${latestCompositeCondition(sql`j.article_id`)}
+      AND ${storyReportCondition(now, spaceId)} AND NOT ${latestCompositeCondition(sql`j.article_id`)}
       AND EXISTS (SELECT 1 FROM fact_articles fa WHERE fa.article_id = j.article_id
         AND fa.fact_id = j.fact_id AND fa.role IN ('primary', 'report'))) IS TRUE) AS valid
     FROM judged j JOIN latest ON latest.article_id = j.article_id

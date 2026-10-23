@@ -1,3 +1,4 @@
+import { useSpace } from "../../lib/space";
 // A page of reports grouped by Beijing day with the same rail and rows as the home timeline
 // (全部动态, topics, search results).
 import { IntentLink } from "../../components/ui/IntentLink";
@@ -6,11 +7,13 @@ import type { FeedItemSummary } from "@aihot/contracts/site";
 import { IconChevronRight } from "../../components/icons";
 import { beijingDate } from "@aihot/contracts/time";
 import { byBeijingDay } from "../../lib/format";
-import { markRead, useReadSet } from "../../lib/local-state";
+import { markRead as markReadInSpace, useReadSet } from "../../lib/local-state";
 import { DayHeader, TimelineSlot } from "./Timeline";
 import { FeedItem } from "./FeedItem";
 
 export function DayList({ items, todayCount = null, headerAside }: { items: FeedItemSummary[]; todayCount?: number | null; headerAside?: React.ReactNode }) {
+  const { slug } = useSpace();
+  const markRead = (id: string) => markReadInSpace(id, slug);
   const readSet = useReadSet();
   const today = beijingDate(Date.now());
   const days = useMemo(() => byBeijingDay(items, (it) => it.timelineAt), [items]);

@@ -78,7 +78,7 @@ async function fetchListingText(source: SourceRow): Promise<{ text: string; viaJ
     // A listing parsed with selectors asks Jina for the rendered HTML (a site our resolver cannot reach
     // still gets its dates and titles from the markup); otherwise Jina's Markdown.
     const format = source.config.parseMode === "html" ? "html" : undefined;
-    const page = await jinaRead(target, { purpose: "source_listing", subject: `source:${source.id}`, cacheToleranceSeconds: source.config.cacheToleranceSeconds, format, perRead: true });
+    const page = await jinaRead(target, { context: source.context, purpose: "source_listing", subject: `source:${source.id}`, cacheToleranceSeconds: source.config.cacheToleranceSeconds, format, perRead: true });
     return { text: page.markdown, viaJina: true, base: source.config.baseUrl ?? target };
   }
   const res = requireOk(await fetchListing(url, { headers: { accept: "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8", ...languageHeaders(source.config.acceptLanguage) }, timeoutMs: 25_000 }));
@@ -362,7 +362,7 @@ export async function fetchDetail(url: string, source: SourceRow, need: DetailNe
   const jinaListing = String(source.config.url ?? "").startsWith(JINA_PREFIX);
   const dateInJina = need.date && jinaListing && !!d.publishedAtRegex;
   const titleInJina = need.title && jinaListing && !!d.titleRegex;
-  const jina = dateInJina || titleInJina ? (await jinaRead(url, { purpose: "source_detail", subject: `source:${source.id}` })).raw : null;
+  const jina = dateInJina || titleInJina ? (await jinaRead(url, { context: source.context, purpose: "source_detail", subject: `source:${source.id}` })).raw : null;
   let html: string | null = null;
   let page: { document: ReturnType<typeof contentDocument>; url: string; whole: boolean } | null = null;
   if ((need.date && !dateInJina) || (need.title && !titleInJina) || need.summary) {

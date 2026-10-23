@@ -1,3 +1,4 @@
+import { unscopedPath } from "../../lib/space-path";
 import { useEffect, useLayoutEffect, useRef, useSyncExternalStore } from "react";
 import { useLocation, useRevalidator } from "react-router";
 import { IntentLink } from "../ui/IntentLink";
@@ -19,7 +20,8 @@ const useIsoLayoutEffect = typeof window === "undefined" ? useEffect : useLayout
  */
 export function TabBar({ changelogVersion }: { changelogVersion: string | null }) {
   const screen = useScreen();
-  const { pathname, key } = useLocation();
+  const { pathname: fullPathname, key } = useLocation();
+  const pathname = unscopedPath(fullPathname);
   const revalidator = useRevalidator();
   const dot = useChangelogDot(changelogVersion);
   const last = useRef<TabKey | undefined>(undefined);

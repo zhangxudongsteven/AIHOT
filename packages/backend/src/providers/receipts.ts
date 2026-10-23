@@ -8,6 +8,8 @@
 //    costs at most one repeat; after that it waits for the admin. A primary handed to a backup stays
 //    unknown for billing and is not automatically released or sent again.
 import { sql, type Db } from "../db.ts";
+import { DEFAULT_SPACE_ID, resolveSpaceContext, type SpaceContext } from "../spaces/context.ts";
+import { checkSpaceQuota } from "../spaces/quotas.ts";
 import { sha256, stableJson } from "../lib/ids.ts";
 import { shutdownSignal } from "../lib/shutdown.ts";
 
@@ -17,10 +19,14 @@ export const budgetMessage = (service: string, window: string) => `Budget for ${
 export class BudgetExceededError extends Error {
   readonly service: string;
   readonly retryAfterSeconds: number;
-  constructor(service: string, window: string, retryAfterSeconds: number) {
-    super(budgetMessage(service, window));
+  readonly spaceId: string | null;
+  readonly scope: "platform" | "space" | "reservation";
+  constructor(service: string, window: string, retryAfterSeconds: number, spaceId: string | null = null, scope: "platform" | "space" | "reservation" = "platform") {
+    super(budgetMessage(service, scope === "platform" ? window : `${scope}:${spaceId ?? "platform"}:${window}`));
     this.service = service;
     this.retryAfterSeconds = retryAfterSeconds;
+    this.spaceId = spaceId;
+    this.scope = scope;
   }
 }
 
@@ -153,6 +159,8 @@ export interface CallOutcome {
 }
 
 export interface ReceiptRequest {
+  /** Explicit channel ownership; absent only for platform/legacy requests. */
+  context?: SpaceContext;
   service: string;
   model?: string | null;
   purpose: string;
@@ -176,12 +184,19 @@ export interface ReceiptResult {
 const PENDING_STALE_MS = 10 * 60 * 1000;
 
 export function logicalKeyFor(req: ReceiptRequest): string {
-  const identity = sha256(stableJson(req.identity));
+  const identity = sha256(stableJson(req.context ? { context: req.context, input: req.identity } : req.identity));
   return [req.service, req.purpose, req.model ?? "-", identity, req.attemptTag ?? "0"].join(":");
 }
 
+function legacyKeyFor(req: ReceiptRequest): string | null {
+  return req.context?.spaceId === DEFAULT_SPACE_ID ? logicalKeyFor({ ...req, context: undefined }) : null;
+}
+
 export async function receiptState(req: ReceiptRequest): Promise<string | null> {
-  const [row] = await sql<{ status: string }[]>`SELECT status FROM receipts WHERE logical_key = ${logicalKeyFor(req)}`;
+  const key = logicalKeyFor(req);
+  const [row] = await sql<{ status: string }[]>`SELECT status FROM receipts
+    WHERE logical_key = ${key} OR (logical_key = ${legacyKeyFor(req)} AND space_id IS NULL AND config_version IS NULL)
+    ORDER BY (logical_key = ${key}) DESC LIMIT 1`;
   return row?.status ?? null;
 }
 
@@ -222,29 +237,32 @@ async function clearStop(tx: Db, key: string): Promise<void> {
   await tx`DELETE FROM settings WHERE key = ${key}`;
 }
 
-async function checkBudget(tx: Db, service: string, model?: string | null): Promise<void> {
+async function checkBudget(tx: Db, service: string, model?: string | null, spaceId: string | null = null): Promise<void> {
   // A model that refused on access or billing is not called again until its stop runs out: one refused
   // request per cooldown, not one per article. Requests already in flight cannot be stopped.
   const stopped = await stopUntil(tx, providerStopKey(service, model));
   if (stopped !== null) throw new BudgetExceededError(service, "provider", Math.ceil((stopped - Date.now()) / 1000));
   const [budget] = await tx<{ per_minute: number; per_hour: number; per_day: number }[]>`
     SELECT per_minute, per_hour, per_day FROM budgets WHERE service = ${service}`;
-  if (!budget) return; // default rows come with the migrations; a service an operator removed is unlimited
-  // Every request sent counts, retries of the same logical request included.
-  const [counts] = await tx<{ minute: number; hour: number; day: number }[]>`
-    SELECT
-      count(*) FILTER (WHERE started_at > now() - interval '1 minute') AS minute,
-      count(*) FILTER (WHERE started_at > now() - interval '1 hour') AS hour,
-      count(*) AS day
-    FROM receipt_attempts
-    WHERE service = ${service} AND origin = 'live' AND started_at > now() - interval '1 day'`;
-  const c = counts!;
-  if (budget.per_minute <= 0 || budget.per_hour <= 0 || budget.per_day <= 0) {
-    throw new BudgetExceededError(service, "stopped", 3600);
+  if (budget) {
+    // Every request sent counts, retries of the same logical request included.
+    const [counts] = await tx<{ minute: number; hour: number; day: number }[]>`
+      SELECT
+        count(*) FILTER (WHERE started_at > now() - interval '1 minute') AS minute,
+        count(*) FILTER (WHERE started_at > now() - interval '1 hour') AS hour,
+        count(*) AS day
+      FROM receipt_attempts
+      WHERE service = ${service} AND origin = 'live' AND started_at > now() - interval '1 day'`;
+    const c = counts!;
+    if (budget.per_minute <= 0 || budget.per_hour <= 0 || budget.per_day <= 0) {
+      throw new BudgetExceededError(service, "stopped", 3600);
+    }
+    if (c.minute >= budget.per_minute) throw new BudgetExceededError(service, "minute", 60);
+    if (c.hour >= budget.per_hour) throw new BudgetExceededError(service, "hour", 600);
+    if (c.day >= budget.per_day) throw new BudgetExceededError(service, "day", 3600);
   }
-  if (c.minute >= budget.per_minute) throw new BudgetExceededError(service, "minute", 60);
-  if (c.hour >= budget.per_hour) throw new BudgetExceededError(service, "hour", 600);
-  if (c.day >= budget.per_day) throw new BudgetExceededError(service, "day", 3600);
+  const quota = await checkSpaceQuota(tx, service, spaceId, budget);
+  if (quota) throw new BudgetExceededError(service, quota.window, quota.retryAfterSeconds, spaceId, quota.scope);
 }
 
 /**
@@ -252,13 +270,25 @@ async function checkBudget(tx: Db, service: string, model?: string | null): Prom
  * A caller persisting business results completes the receipt in the same transaction.
  */
 export async function paidRequest(req: ReceiptRequest, call: () => Promise<CallOutcome>, beforeRequest?: (tx: Db) => Promise<void>): Promise<ReceiptResult> {
+  if (req.context) req = { ...req, context: await resolveSpaceContext(req.context.spaceId, req.context.configVersion) };
   const logicalKey = logicalKeyFor(req);
 
   const claimed = await sql.begin(async (tx) => {
     // Serialise budget checks per service so concurrent workers cannot overshoot.
     await tx`SELECT pg_advisory_xact_lock(hashtext(${"budget:" + req.service}))`;
-    const [existing] = await tx<ReceiptRow[]>`
+    if (req.context) await tx`SELECT pg_advisory_xact_lock(hashtext(${"space-budget:" + req.context.spaceId + ":" + req.service}))`;
+    let [existing] = await tx<ReceiptRow[]>`
       SELECT id, status, response, created_at, updated_at FROM receipts WHERE logical_key = ${logicalKey} FOR UPDATE`;
+    // Only the single-site upgrade bridge may claim an unowned historical response. Matching the old
+    // logical key requires the exact same model/input/prompt; unknown outcomes remain unknown.
+    if (!existing && legacyKeyFor(req)) {
+      [existing] = await tx<ReceiptRow[]>`SELECT id, status, response, created_at, updated_at FROM receipts
+        WHERE logical_key = ${legacyKeyFor(req)} AND space_id IS NULL AND config_version IS NULL FOR UPDATE`;
+      if (existing) {
+        await tx`UPDATE receipts SET logical_key = ${logicalKey}, space_id = ${req.context!.spaceId}, config_version = ${req.context!.configVersion} WHERE id = ${existing.id}`;
+        await tx`UPDATE receipt_attempts SET space_id = ${req.context!.spaceId}, config_version = ${req.context!.configVersion} WHERE receipt_id = ${existing.id}`;
+      }
+    }
     if (existing?.status === "received" || existing?.status === "completed") return { kind: "reuse" as const, row: existing };
     // Finish business writes from saved answers during shutdown, but never reserve or send the
     // next paid page/batch. An answer already in flight still saves below, without this check.
@@ -271,19 +301,19 @@ export async function paidRequest(req: ReceiptRequest, call: () => Promise<CallO
       }
       if (existing.status === "unknown") return { kind: "unknown" as const, row: existing };
       // failed: the provider did not take the request, or its answer was unusable; a new attempt is allowed.
-      await checkBudget(tx, req.service, req.model);
+      await checkBudget(tx, req.service, req.model, req.context?.spaceId ?? null);
       await beforeRequest?.(tx);
       const [r] = await tx<{ attempts: number }[]>`
         UPDATE receipts SET status = 'pending', attempts = attempts + 1, error = NULL, updated_at = now() WHERE id = ${existing.id} RETURNING attempts`;
       const attemptId = await startAttempt(tx, existing.id, r!.attempts, req);
       return { kind: "call" as const, id: existing.id, attemptId };
     }
-    await checkBudget(tx, req.service, req.model);
+    await checkBudget(tx, req.service, req.model, req.context?.spaceId ?? null);
     await beforeRequest?.(tx);
     const [row] = await tx<{ id: number }[]>`
-      INSERT INTO receipts (logical_key, service, model, purpose, subject, status, request, attempts)
+      INSERT INTO receipts (logical_key, service, model, purpose, subject, status, request, attempts, space_id, config_version)
       VALUES (${logicalKey}, ${req.service}, ${req.model ?? null}, ${req.purpose}, ${req.subject ?? null}, 'pending',
-              ${tx.json((req.requestSummary ?? {}) as never)}, 1)
+              ${tx.json((req.requestSummary ?? {}) as never)}, 1, ${req.context?.spaceId ?? null}, ${req.context?.configVersion ?? null})
       RETURNING id`;
     if (req.fallbackFor) {
       await tx`UPDATE receipts SET request = request || ${tx.json({ fallbackReceiptId: row!.id })}
@@ -348,7 +378,7 @@ export async function paidRequest(req: ReceiptRequest, call: () => Promise<CallO
 
 async function startAttempt(tx: Db, receiptId: number, attempt: number, req: ReceiptRequest): Promise<number> {
   const [row] = await tx<{ id: number }[]>`
-    INSERT INTO receipt_attempts (receipt_id, attempt, service, model, status) VALUES (${receiptId}, ${attempt}, ${req.service}, ${req.model ?? null}, 'pending')
+    INSERT INTO receipt_attempts (receipt_id, attempt, service, model, status, space_id, config_version) VALUES (${receiptId}, ${attempt}, ${req.service}, ${req.model ?? null}, 'pending', ${req.context?.spaceId ?? null}, ${req.context?.configVersion ?? null})
     RETURNING id`;
   return row!.id;
 }
@@ -389,9 +419,9 @@ export function awaitingRelease(receipt: ReturnType<typeof sql> = sql`receipts`)
  * Releases an unknown receipt: marked failed, so the next attempt of its request calls again (who
  * releases and when: operations/recover.ts). Null when the receipt is not, or no longer, unknown.
  */
-export async function releaseUnknownReceipt(db: Db, id: number, error: string): Promise<{ subject: string | null; purpose: string } | null> {
-  const [released] = await db<{ subject: string | null; purpose: string }[]>`
-    UPDATE receipts SET status = 'failed', error = ${error}, updated_at = now() WHERE id = ${id} AND status = 'unknown' RETURNING subject, purpose`;
+export async function releaseUnknownReceipt(db: Db, id: number, error: string): Promise<{ id: number; subject: string | null; purpose: string; space_id: string | null; config_version: string | null } | null> {
+  const [released] = await db<{ id: number; subject: string | null; purpose: string; space_id: string | null; config_version: string | null }[]>`
+    UPDATE receipts SET status = 'failed', error = ${error}, updated_at = now() WHERE id = ${id} AND status = 'unknown' RETURNING id, subject, purpose, space_id, config_version`;
   if (released) await db`UPDATE receipt_attempts SET status = 'failed', error = ${error} WHERE receipt_id = ${id} AND status = 'unknown'`;
   return released ?? null;
 }

@@ -10,7 +10,9 @@ import { loadGroupReports } from "@aihot/backend/publication/groups";
 import { loadItemDetail } from "@aihot/backend/publication/detail";
 import { loadStoryDetail, v1HotTopics, v1Story } from "@aihot/backend/publication/stories";
 import { candidates } from "@aihot/backend/reports/edition";
-import { composeStoryDigest, DIGEST_PROMPT_VERSION, DIGEST_SYSTEM, DigestSchema } from "@aihot/backend/events/digest";
+import { composeStoryDigest, DigestSchema } from "@aihot/backend/events/digest";
+import { resolveSpaceContext } from "@aihot/backend/spaces/context";
+import { promptText, promptVersionFor } from "@aihot/backend/editorial/prompts";
 import { chatJson } from "@aihot/backend/providers/llm";
 import { computeHotRanking } from "@aihot/backend/events/hot";
 import { detachFromFact, moveToFact, rewriteStoryDigest } from "@aihot/backend/events/corrections";
@@ -427,8 +429,9 @@ test("an in-flight digest cannot overwrite an editor revision or a merge, and it
     assert.deepEqual({...stored},{version:3,title:'人工修正后的事件',digest:'人工修正后的综述内容',latest:'人工确认进展',merged_into:target?.storyId ?? null});
     assert.equal((await sql`SELECT 1 FROM story_digests WHERE story_id=${g.storyId}`).length,0,'obsolete input cannot create digest history');
     const calls = provider.hits();
-    const reused = await chatJson({model:'deepseek-flash',purpose:'story_digest',subject:`story:${g.storyId}@1`,promptVersion:DIGEST_PROMPT_VERSION,
-      system:DIGEST_SYSTEM,user,schema:DigestSchema,temperature:0.3,maxTokens:1200});
+    const context = await resolveSpaceContext('default');
+    const reused = await chatJson({context, model:'deepseek-flash',purpose:'story_digest',subject:`story:${g.storyId}@1`,promptVersion:promptVersionFor(context, 'story-digest'),
+      system:promptText('story-digest', {}, context),user,schema:DigestSchema,temperature:0.3,maxTokens:1200});
     assert.equal(provider.hits(),calls,'the settled response is reused without another provider request');
     const [receipt] = await sql`SELECT status FROM receipts WHERE id=${reused.receiptId}`;
     assert.equal(receipt!.status,'completed');

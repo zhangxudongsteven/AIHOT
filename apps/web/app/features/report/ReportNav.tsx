@@ -1,3 +1,4 @@
+import { useSpaceFetch } from "../../lib/space";
 // Moving between reports: the archive column on desktop; on phones the kind switch in the bar
 // (ReportLayout) and recent-issue chips under it.
 import { IntentLink } from "../../components/ui/IntentLink";
@@ -49,13 +50,14 @@ export function ReportArchive({ kind, index, current }: { kind: ReportKind; inde
 function ArchiveGroup({ g, kind, current, initiallyOpen }: {
   g: ReturnType<typeof archiveGroups>[number]; kind: ReportKind; current: string | null; initiallyOpen: boolean;
 }) {
+  const spaceFetch = useSpaceFetch();
   const [open, setOpen] = useState(initiallyOpen);
   useEffect(() => setOpen(initiallyOpen), [initiallyOpen]);
   const [loaded, setLoaded] = useState<ReportNavigationEntry[] | null>(null);
   useEffect(() => {
     if (!open || loaded || kind !== "daily" || !g.entries.some((e) => e.title === undefined)) return;
     const controller = new AbortController();
-    fetch(`/api/site/reports/daily/months/${g.id}`, { signal: controller.signal })
+    spaceFetch(`/api/site/reports/daily/months/${g.id}`, { signal: controller.signal })
       .then((r) => r.ok ? r.json() : null)
       .then((data: ReportNavigationResponse | null) => { if (data && !controller.signal.aborted) setLoaded(data.items); })
       .catch(() => {});

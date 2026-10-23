@@ -2,7 +2,7 @@
 // Addresses are the site's configured public address (`base`); what visitors copy carries the site's tag
 // (CopyTag) when it has one.
 import { Fragment, useState } from "react";
-import { Link } from "react-router";
+import { Link } from "../../lib/space-router";
 import { PUBLIC_INTERFACE_VERSION } from "@aihot/contracts/http-policy";
 import { MCP_TOOL_NAMES as T, MCP_TOOLS } from "@aihot/contracts/mcp";
 import { feedCategoryLabel, PUBLIC_API_CATEGORY_KEYS } from "@aihot/contracts/taxonomy";

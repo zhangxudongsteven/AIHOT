@@ -1,3 +1,4 @@
+import { spacePath, spaceSlug } from "./space-path.ts";
 // Server-side HTTP client for route loaders, and the cache lifetimes routes give their pages. The web
 // process never touches the database; SSR reads the api over loopback with keep-alive, one or two
 // requests per page.
@@ -20,7 +21,8 @@ class ApiError extends Error {
   }
 }
 
-export async function apiGet<T>(path: string, init?: { signal?: AbortSignal; headers?: Record<string, string>; responseHeaders?: Headers }): Promise<T> {
+export async function apiGet<T>(path: string, init?: { request?: Request; signal?: AbortSignal; headers?: Record<string, string>; responseHeaders?: Headers }): Promise<T> {
+  path = spacePath(path, init?.request ? spaceSlug(new URL(init.request.url).pathname) : null);
   try {
     const res = await fetch(`${API_BASE_URL}${path}`, {
       headers: { accept: "application/json", "x-aihot-ssr": "1", ...init?.headers },
@@ -47,15 +49,15 @@ export async function apiGet<T>(path: string, init?: { signal?: AbortSignal; hea
  * Maps API failures to route responses: real 404s, the permanent redirect of a merged page (`merged`
  * gives the page of the id it was merged into), the search-busy page, otherwise 503.
  */
-export async function loadOr404<T>(path: string, opts: { busyRedirect?: string; merged?: (id: string) => string; responseHeaders?: Headers; signal?: AbortSignal } = {}): Promise<T> {
+export async function loadOr404<T>(path: string, opts: { request?: Request; busyRedirect?: string; merged?: (id: string) => string; responseHeaders?: Headers; signal?: AbortSignal } = {}): Promise<T> {
   try {
-    return await apiGet<T>(path, { responseHeaders: opts.responseHeaders, signal: opts.signal });
+    return await apiGet<T>(path, { request: opts.request, responseHeaders: opts.responseHeaders, signal: opts.signal });
   } catch (error) {
     if (opts.signal?.aborted) throw error;
     if (error instanceof ApiError) {
       if (error.status === 404) throw data({ message: "not_found" }, { status: 404 });
-      if (error.mergedInto && opts.merged) throw redirect(opts.merged(error.mergedInto), 308);
-      if (error.status === 503 && opts.busyRedirect) throw redirect(opts.busyRedirect);
+      if (error.mergedInto && opts.merged) throw redirect(spacePath(opts.merged(error.mergedInto), opts.request ? spaceSlug(new URL(opts.request.url).pathname) : null), 308);
+      if (error.status === 503 && opts.busyRedirect) throw redirect(spacePath(opts.busyRedirect, opts.request ? spaceSlug(new URL(opts.request.url).pathname) : null));
       if (error.status === 400) throw data({ message: "bad_request" }, { status: 400 });
     }
     throw data({ message: "unavailable" }, { status: 503 });

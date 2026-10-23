@@ -1,3 +1,4 @@
+import { spaceSlug } from "./space-path";
 // Public pages already rendered in this document can be revisited until their server deadline.
 // Nothing persists across a document reload; list snapshots separately own the reader's position.
 import type { ClientLoaderFunctionArgs, ShouldRevalidateFunction } from 'react-router';
@@ -8,7 +9,7 @@ const addressOf = (url: URL) => url.pathname + url.search;
 const deadlineOf = (value: unknown) => (value as { expiresAt?: number } | null)?.expiresAt ?? 0;
 
 export function hasFreshPage(url: URL): boolean {
-  return deadlineOf(pages.get(addressOf(url))) > Date.now();
+  return deadlineOf(pages.get(`${spaceSlug(url.pathname) ?? "default"}:${addressOf(url)}`)) > Date.now();
 }
 
 /**
@@ -18,8 +19,9 @@ export function hasFreshPage(url: URL): boolean {
  * By default every address has its own.
  */
 export function pageReuse<T>(key: (url: URL) => string = addressOf) {
+  const scopedKey = (url: URL) => `${spaceSlug(url.pathname) ?? "default"}:${key(url)}`;
   async function clientLoader({ request, serverLoader }: ClientLoaderFunctionArgs) {
-    const held = key(new URL(request.url));
+    const held = scopedKey(new URL(request.url));
     const previous = pages.get(held);
     pages.delete(held);
     if (deadlineOf(previous) > Date.now()) {
@@ -38,9 +40,9 @@ export function pageReuse<T>(key: (url: URL) => string = addressOf) {
 
   const shouldRevalidate: ShouldRevalidateFunction = ({ currentUrl, nextUrl, defaultShouldRevalidate }) => {
     // Revalidator/retry, or tapping the current page again: ask for its data normally.
-    if (defaultShouldRevalidate && addressOf(currentUrl) === addressOf(nextUrl)) pages.delete(key(nextUrl));
+    if (defaultShouldRevalidate && addressOf(currentUrl) === addressOf(nextUrl)) pages.delete(scopedKey(nextUrl));
     // Moving between addresses that share a result still runs the loader, which keeps the result while it is fresh.
-    return defaultShouldRevalidate || key(currentUrl) === key(nextUrl);
+    return defaultShouldRevalidate || scopedKey(currentUrl) === scopedKey(nextUrl);
   };
 
   return { clientLoader, shouldRevalidate };

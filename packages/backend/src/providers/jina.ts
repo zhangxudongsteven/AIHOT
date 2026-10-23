@@ -1,5 +1,6 @@
 // Jina Reader (r.jina.ai): browser-rendered page text. Paid per request, reached through the egress
 // proxy, always behind receipts and the per-minute/hour/day budget (any zero stops it).
+import type { SpaceContext } from "../spaces/context.ts";
 import { credential } from "../config.ts";
 import { guardedFetch } from "../lib/http-fetch.ts";
 import { assertPageContent, contentDocument, UnavailablePageError } from "../lib/page-content.ts";
@@ -20,7 +21,7 @@ const CONTENT = "\nMarkdown Content:\n";
  */
 export async function jinaRead(
   targetUrl: string,
-  opts: { purpose: string; subject: string; format?: "markdown" | "html"; cacheToleranceSeconds?: number; perRead?: boolean },
+  opts: { context?: SpaceContext; purpose: string; subject: string; format?: "markdown" | "html"; cacheToleranceSeconds?: number; perRead?: boolean },
 ): Promise<{ markdown: string; raw: string; receiptId: number }> {
   const key = credential("collectors", "JINA_API_KEY");
   if (!key) throw new Error("JINA_API_KEY is not configured");
@@ -30,7 +31,7 @@ export async function jinaRead(
   const now = new Date().toISOString();
   const day = opts.perRead ? now : now.slice(0, 10);
   const receipt = await paidRequest(
-    { service: "jina", model: null, purpose: opts.purpose, subject: opts.subject, identity: { url: targetUrl, day, format: opts.format ?? "markdown" }, requestSummary: { url: targetUrl } },
+    { context: opts.context, service: "jina", model: null, purpose: opts.purpose, subject: opts.subject, identity: { url: targetUrl, day, format: opts.format ?? "markdown" }, requestSummary: { url: targetUrl } },
     async () => {
       const res = await guardedFetch(`${base}/${targetUrl}`, {
         headers: { authorization: `Bearer ${key}`, "x-return-format": opts.format ?? "markdown", accept: "text/plain", ...tolerance },

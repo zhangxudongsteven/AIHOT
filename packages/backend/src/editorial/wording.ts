@@ -2,6 +2,7 @@
 // reason, named with what to write instead, for the one call that mends them (analyze.ts, mendWording).
 import { READER_WORDING } from "@aihot/industry/wording";
 import { ITEM_COPY } from "@aihot/site";
+import { configForContext, type SpaceContext } from "../spaces/context.ts";
 
 export interface ReaderCopy {
   titleZh: string;
@@ -15,14 +16,16 @@ const FIELDS: Array<[keyof ReaderCopy, string]> = [["titleZh", "标题"], ["summ
  * Every use of a word of the list in a copy, each as a line the model can act on: where, the words around it,
  * and the fix. Each use is its own line, so a copy that mends one of two has fewer.
  */
-export function wordingProblems(copy: ReaderCopy): string[] {
+export function wordingProblems(copy: ReaderCopy, context?: SpaceContext): string[] {
+  const pack = context ? configForContext(context) : null;
+  const wording: ReadonlyArray<readonly [RegExp, string]> = pack ? pack.readerWording.map(w => [new RegExp(w.pattern.source, w.pattern.flags), w.fix]) : READER_WORDING;
   const problems: string[] = [];
   for (const [field, name] of FIELDS) {
     const text = copy[field];
     if (!text) continue;
-    for (const [pattern, fix] of READER_WORDING) {
+    for (const [pattern, fix] of wording) {
       for (const hit of text.matchAll(new RegExp(pattern.source, `${pattern.flags.replace("g", "")}g`))) {
-        problems.push(`${name}用了“${hit[0]}”（“${text.slice(Math.max(0, hit.index - 8), hit.index + hit[0].length + 8)}”）：${fix}`);
+        problems.push(`${field === "reasonZh" && pack ? pack.reasonLabel : name}用了“${hit[0]}”（“${text.slice(Math.max(0, hit.index - 8), hit.index + hit[0].length + 8)}”）：${fix}`);
       }
     }
   }

@@ -1,6 +1,7 @@
+import { useSpaceFetch } from "../../lib/space";
 // Duplicate reports of one news fact. Desktop expands inline; phones use a sheet.
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Link, useLocation } from "react-router";
+import { Link, useLocation } from "../../lib/space-router";
 import { Collapse } from "../../components/ui/Presence";
 import { Sheet } from "../../components/ui/Sheet";
 import type { GroupInfo, GroupReport, GroupReportsResponse, TimelineFilters } from "@aihot/contracts/site";
@@ -38,6 +39,7 @@ function remember(entry: string, key: string, reports: GroupReport[] | null | un
  * until the new ones arrive, and a group with no reports left shows none.
  */
 function useReports(url: string, saved: GroupReport[] | null = null) {
+  const spaceFetch = useSpaceFetch();
   const [state, setState] = useState({ url, reports: saved, loading: false, error: false });
   const request = useRef<AbortController | null>(null);
   useEffect(() => () => request.current?.abort(), [url]);
@@ -47,7 +49,7 @@ function useReports(url: string, saved: GroupReport[] | null = null) {
     const controller = (request.current = new AbortController());
     setState((s) => ({ url, reports: s.url === url ? s.reports : null, loading: true, error: false }));
     try {
-      const res = await fetch(url, { signal: controller.signal });
+      const res = await spaceFetch(url, { signal: controller.signal });
       if (!res.ok && !(again && res.status === 404)) throw new Error(String(res.status));
       const reports = res.ok ? ((await res.json()) as GroupReportsResponse).reports : [];
       if (!controller.signal.aborted) setState({ url, reports, loading: false, error: false });

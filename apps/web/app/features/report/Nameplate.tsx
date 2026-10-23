@@ -1,3 +1,4 @@
+import { useSpace } from "../../lib/space";
 // The report nameplates (site/brand/nameplates/, made by scripts/nameplates.ts from the pack's
 // subject word). Each logotype is cached on its own; the two paths take the theme's ink and accent.
 import daily from "@aihot/site/brand/nameplates/daily.svg?url&no-inline";
@@ -14,6 +15,8 @@ const NAMEPLATES = {
 } as const;
 
 export function Nameplate({ which, className = "" }: { which: keyof typeof NAMEPLATES; className?: string }) {
+  const { isDefault } = useSpace();
+  if (!isDefault) return <span className={`font-serif text-[clamp(2.25rem,6vw,4.5rem)] font-black leading-none tracking-widest ${className}`} aria-hidden="true">{{ daily: "日报", weekly: "周报", monthly: "月报", archive: "日报合订本" }[which]}</span>;
   const n = NAMEPLATES[which];
   return (
     <svg viewBox={n.viewBox} className={className} aria-hidden="true" focusable="false">

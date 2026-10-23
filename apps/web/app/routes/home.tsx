@@ -1,3 +1,5 @@
+import { spacePath, spaceSlug } from "../lib/space-path";
+import { nonDefaultSpace, withSpaceMeta } from "../lib/seo";
 import { redirect, useLoaderData } from "react-router";
 import type { Route } from "./+types/home";
 import type { TimelineResponse } from "@aihot/contracts/site";
@@ -18,17 +20,19 @@ export async function loader({ request }: Route.LoaderArgs) {
   const url = new URL(request.url);
   const q = url.searchParams.get("q");
   // Search lives on /all; keep the parameters so old links still land on results.
-  if (q && q.trim()) throw redirect(`/all${url.search}`);
-  const filters = readFilters(url.searchParams);
+  if (q && q.trim()) throw redirect(spacePath(`/all${url.search}`, spaceSlug(url.pathname)));
+  const filters = readFilters(url.searchParams, null);
   const upstream = new Headers();
-  const data = await loadOr404<TimelineResponse>(listPath("/api/site/timeline", filterParams(filters)), { responseHeaders: upstream, signal: request.signal });
-  return cachedPage(60, { data, filters }, upstream);
+  const data = await loadOr404<TimelineResponse>(listPath("/api/site/timeline", filterParams(filters)), { responseHeaders: upstream, request, signal: request.signal });
+  return cachedPage(60, { data, filters: data.filters }, upstream);
 }
 
-export function meta({ loaderData }: Route.MetaArgs) {
+function routeMeta(args: Route.MetaArgs) {
+  const { loaderData } = args;
+  const space = nonDefaultSpace(args);
   const path = listPath("/", loaderData ? filterParams(loaderData.filters) : {});
   const titles = loaderData?.data.cards.map((c) => c.item.title) ?? [];
-  return pageMeta({ path, noindex: hasFeedFilters(loaderData?.filters), jsonLd: path === "/" ? [...siteLd(), itemListLd("/", "精选", titles)] : undefined });
+  return pageMeta({ title: space?.name, path, noindex: hasFeedFilters(loaderData?.filters), jsonLd: path === "/" ? [...siteLd(), itemListLd("/", "精选", titles)] : undefined });
 }
 
 export default function Home() {
@@ -53,3 +57,5 @@ export default function Home() {
     </div>
   );
 }
+
+export const meta = withSpaceMeta(routeMeta);

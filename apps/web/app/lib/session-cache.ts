@@ -1,3 +1,4 @@
+import { browserSpace } from "./space-path.ts";
 // History-entry caches keep same-document returns synchronous. Writes are coalesced after interaction;
 // hiding/leaving the document flushes them so a browser back/forward reload can restore the same data.
 import { readJson, storedKeys, writeRaw } from "./local-state.ts";
@@ -28,7 +29,8 @@ export function sessionCache<T extends Timed>(prefix: string, maxAge: number) {
     memory.set(key, value);
     if (memory.size > MAX_MEMORY_ENTRIES) memory.delete(memory.keys().next().value!);
   }
-  function peek(key: string): T | null {
+  const entryKey = (key: string) => { const slug = browserSpace(); return slug && slug !== "default" ? `${encodeURIComponent(slug)}:${key}` : key; };
+  function peekEntry(key: string): T | null {
     const value = memory.get(key) ?? dirty.get(key);
     if (!value) return null;
     if (Date.now() - value.savedAt <= maxAge) return value;
@@ -37,8 +39,10 @@ export function sessionCache<T extends Timed>(prefix: string, maxAge: number) {
     writeRaw(prefix + key, null, "session");
     return null;
   }
+  function peek(key: string): T | null { return peekEntry(entryKey(key)); }
   function read(key: string): T | null {
-    const hit = peek(key);
+    key = entryKey(key);
+    const hit = peekEntry(key);
     if (hit) return hit;
     const value = stored(prefix + key);
     if (value) remember(key, value);
@@ -46,6 +50,7 @@ export function sessionCache<T extends Timed>(prefix: string, maxAge: number) {
     return value;
   }
   function set(key: string, value: T) {
+    key = entryKey(key);
     remember(key, value);
     dirty.set(key, value);
     if (!listening) {

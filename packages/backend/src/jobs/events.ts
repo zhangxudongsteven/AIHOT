@@ -12,14 +12,14 @@ export async function registerEventJobs(boss: PgBoss) {
   await work(boss, QUEUES.group, { localConcurrency: 1, pollingIntervalSeconds: 0.5 }, async (data) => {
     const { articleId, signalOnly } = data;
     // A discussion post comes here straight from collection: record it first (settleNonEditorial).
-    if (signalOnly && !(await settleNonEditorial(articleId)).group) return { verdict: "skipped" };
-    const result = await groupArticle(articleId, { signalOnly });
+    if (signalOnly && !(await settleNonEditorial(articleId, data)).group) return { verdict: "skipped" };
+    const result = await groupArticle(articleId, data);
     if (result.storyId && !result.verdict.startsWith("signal")) {
       await enqueue(QUEUES.digest, { storyId: result.storyId }, { singletonKey: `story:${result.storyId}`, startAfter: 60 });
     }
     return result;
   });
-  await work(boss, QUEUES.digest, { localConcurrency: 3, pollingIntervalSeconds: 5 }, ({ storyId }) => composeStoryDigest(storyId));
+  await work(boss, QUEUES.digest, { localConcurrency: 3, pollingIntervalSeconds: 5 }, ({ storyId, context }) => composeStoryDigest(storyId, { context }));
 }
 
 /**
@@ -33,7 +33,7 @@ export async function sweepUngrouped(): Promise<{ enqueued: number }> {
   return sql.begin(async (tx) => {
     const rows = await tx<{ id: string; participation_mode: string; backfill: boolean; published_at: Date | null; discovered_at: Date }[]>`
       SELECT a.id, s.participation_mode, a.backfill, a.published_at, a.discovered_at FROM articles a JOIN sources s ON s.id = a.source_id
-      WHERE a.grouping_status = 'pending' AND a.created_at < now() - interval '3 minutes'
+      WHERE EXISTS (SELECT 1 FROM spaces WHERE spaces.id = a.space_id AND spaces.enabled) AND a.grouping_status = 'pending' AND a.created_at < now() - interval '3 minutes'
         AND (s.participation_mode = 'editorial' AND a.processing_state = 'analyzed' AND EXISTS (
               SELECT 1 FROM analyses an WHERE an.article_id = a.id AND an.input_revision = a.revision AND an.relevance = 'pass')
           OR s.participation_mode = 'hot_signal' AND a.processing_state = 'skipped' AND ${newsCondition})

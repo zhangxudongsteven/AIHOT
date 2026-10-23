@@ -1,4 +1,5 @@
 // The saved digest's evidence and fingerprint, shared by its writer and every public reader.
+import { eventContext, type EventOptions } from "../events/scope.ts";
 import { sql, type Db } from "../db.ts";
 import { sha256, stableJson } from "../lib/ids.ts";
 import { evidenceCondition, listedCondition } from "./scope.ts";
@@ -33,7 +34,8 @@ export function digestFactEvidence(report: Omit<DigestReport, "story_id">) {
     extractedEvidence: typeof fact.evidence === "string" ? fact.evidence : null };
 }
 
-export async function digestReports(db: Db, storyIds: number[], now = new Date()): Promise<DigestReport[]> {
+export async function digestReports(db: Db, storyIds: number[], now = new Date(), options: EventOptions = {}): Promise<DigestReport[]> {
+  const context = await eventContext(options, db);
   if (!storyIds.length) return [];
   return db<DigestReport[]>`
     SELECT DISTINCT ON (f.story_id, p.article_id) f.story_id, p.article_id AS id, p.title, p.summary,
@@ -43,7 +45,7 @@ export async function digestReports(db: Db, storyIds: number[], now = new Date()
       an.output->'fact' AS structured_fact
     FROM facts f JOIN fact_articles fa ON fa.fact_id = f.id JOIN publications p ON p.article_id = fa.article_id
     JOIN sources s ON s.id = p.source_id LEFT JOIN analyses an ON an.id = p.analysis_id
-    WHERE f.story_id = ANY(${storyIds}::bigint[]) AND ${evidenceCondition()} AND ${listedCondition(now)}
+    WHERE f.space_id = ${context.spaceId} AND f.story_id = ANY(${storyIds}::bigint[]) AND ${evidenceCondition()} AND ${listedCondition(now, context.spaceId)}
     ORDER BY f.story_id, p.article_id, (fa.role = 'primary') DESC, f.id`;
 }
 

@@ -1,3 +1,4 @@
+import { spaceCondition } from "./scope.ts";
 // Starred items live in the browser; this tells the page which ones are still public, and the source
 // name a public one shows today (older stars saved the admin name). A starred item stays available as
 // long as its page does (rules.hasItemPage), whether or not it is in the lists.
@@ -12,7 +13,7 @@ export async function itemAvailability(ids: string[]): Promise<Record<string, It
   if (clean.length === 0) return out;
   const rows = await sql<{ id: string; visibility: string; source_mode: string; source_name: string }[]>`
     SELECT p.article_id AS id, p.visibility, s.participation_mode AS source_mode, s.name AS source_name
-    FROM publications p JOIN sources s ON s.id = p.source_id WHERE p.article_id IN ${sql(clean)}`;
+    FROM publications p JOIN sources s ON s.id = p.source_id WHERE ${spaceCondition()} AND p.article_id IN ${sql(clean)}`;
   for (const r of rows) {
     if (!hasItemPage({ visibility: r.visibility, sourceMode: r.source_mode })) continue;
     out[r.id] = { status: r.visibility === "summary-only" ? "summary-only" : "public", sourceName: publicSourceName(r.source_name) };

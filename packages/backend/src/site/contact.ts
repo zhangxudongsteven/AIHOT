@@ -1,3 +1,4 @@
+import { publicationSpaceId } from "../publication/context.ts";
 // About-page contact codes: replaceable from the admin without code changes (file names carry a content
 // hash), or shipped with the site (site/brand/contact/qr-wechat…, qr-feishu…). The page shows a
 // code only when set. The maker block can show the avatar of an X account the site follows as a source
@@ -33,7 +34,7 @@ export async function loadContact(): Promise<ContactSettings> {
 export async function loadMakerAvatar(): Promise<string | null> {
   const sourceId = ABOUT.maker?.avatarSourceId;
   if (!sourceId) return null;
-  const [row] = await sql<{ icon_url: string | null }[]>`SELECT icon_url FROM sources WHERE id = ${sourceId}`;
+  const [row] = await sql<{ icon_url: string | null }[]>`SELECT icon_url FROM sources WHERE space_id = ${publicationSpaceId()} AND id = ${sourceId}`;
   const icon = row?.icon_url?.replace(/_(normal|bigger|mini)(\.\w+)$/, "_400x400$2") ?? null;
   return proxiedImage(icon, "thumb");
 }

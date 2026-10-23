@@ -351,7 +351,19 @@ export interface ReportNavigationResponse {
 }
 
 /** Site-wide facts for the web shell: the changelog red-dot anchor. */
+/** Safe channel metadata; never includes prompts, model specifications or credentials. */
+export interface PublicSpace {
+  id: string;
+  slug: string;
+  name: string;
+  configVersion: string;
+}
+
 export interface SiteMeta {
+  space?: PublicSpace | null;
+  spaces?: PublicSpace[];
+  categories?: Array<{ key: string; label: string; section: string; tagColor: string }>;
+  reportSettings?: { editionWhen: Record<ReportKind, string>; releaseUnit: string | null };
   changelogVersion: string;
 }
 

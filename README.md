@@ -154,6 +154,8 @@ docker compose up -d --build
 
 ## 文档
 
+本 fork 当前归档为公开接口 **4.1.0 开发版本**，已接入多频道配置、阅读、独立报告、通知和配额。说明见[频道开发](docs/multi-space-development.md)及[评审与版本记录](docs/reports/2026-10-23-review.md)；[7 项已知问题](docs/known-issues.md)等待后续版本修复，尚未部署生产或完成业务验收。
+
 | 文档 | 内容 |
 |---|---|
 | [把它改成你的行业](docs/customize.md) | 站名、分类、主题、信源、提示词、门槛、模型、品牌，一步一步来 |

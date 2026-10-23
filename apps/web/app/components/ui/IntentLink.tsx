@@ -1,5 +1,6 @@
+import { spacePath, spaceSlug } from "../../lib/space-path";
 import { useContext, useEffect, useRef, useState } from "react";
-import { Link, PrefetchPageLinks, UNSAFE_DataRouterContext, UNSAFE_FrameworkContext, useHref, useLocation, type LinkProps } from "react-router";
+import { Link, PrefetchPageLinks, UNSAFE_DataRouterContext, UNSAFE_FrameworkContext, useHref, useLocation, type LinkProps } from "../../lib/space-router";
 import { hasFreshPage } from '../../lib/page-reuse';
 
 /**
@@ -14,7 +15,8 @@ export function IntentLink({ onPointerDown, onTouchStart, onTouchMove, onTouchEn
   // stays on screen (a tab) does not keep prefetching once the reader is somewhere else.
   const [pressedOn, setPressedOn] = useState<string | null>(null);
   const ready = pressedOn === location.key;
-  const href = useHref(props.to);
+  const targetTo = typeof props.to === "string" ? spacePath(props.to, spaceSlug(location.pathname)) : { ...props.to, pathname: props.to.pathname ? spacePath(props.to.pathname, spaceSlug(location.pathname)) : undefined };
+  const href = useHref(targetTo);
   const context = useContext(UNSAFE_DataRouterContext);
   const framework = useContext(UNSAFE_FrameworkContext);
   // Router prefetch loads chunks but opts clientLoader routes out of data prefetch. Their

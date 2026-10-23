@@ -1,3 +1,4 @@
+import { publicationSpaceId, publicationSpace } from "./context.ts";
 // What the site tells readers about an event (the hot list and the event page), by the rule the digest is
 // written by (events/digest.ts): its listed evidence. A digest stands while its saved evidence remains
 // public and unchanged; the latest development is the newest listed evidence.
@@ -36,8 +37,10 @@ export async function storyTexts(storyIds: number[], now = new Date()): Promise<
       WHERE f.story_id = st.id AND ${evidenceCondition()} AND ${listedCondition(now)}
       ORDER BY coalesce(p.published_at, p.discovered_at) DESC, p.article_id LIMIT 1
     ) latest ON true
-    WHERE st.id = ANY(${storyIds}::bigint[])`;
-  const reports = await digestReports(sql, rows.filter((r) => r.current && r.digest && r.inputs_hash).map((r) => Number(r.id)), now);
+    WHERE st.space_id = ${publicationSpaceId()} AND st.id = ANY(${storyIds}::bigint[])`;
+  const space = publicationSpace();
+  const reports = await digestReports(sql, rows.filter((r) => r.current && r.digest && r.inputs_hash).map((r) => Number(r.id)), now,
+    space ? { context: { spaceId: space.id, configVersion: space.configVersion } } : {});
   return new Map(rows.map((r) => {
     // New reports may extend an event without changing the evidence behind its saved digest.
     const saved = new Set(r.article_ids ?? []);

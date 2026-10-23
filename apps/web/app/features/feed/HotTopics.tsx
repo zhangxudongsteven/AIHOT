@@ -1,4 +1,4 @@
-import { Link } from "react-router";
+import { Link } from "../../lib/space-router";
 import type { HotStripEntry } from "@aihot/contracts/site";
 import { IconArrowRight, IconMinus, IconTrendDown, IconTrendUp } from "../../components/icons";
 import { Faces } from "../hot/Faces";

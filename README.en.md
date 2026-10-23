@@ -156,6 +156,8 @@ What is most worth your time is the scoring rubric (`industry/prompts/selection-
 
 ## Documentation
 
+This fork records public interface **4.1.0 as a development version**, with channel configuration, reading, independent reports, notifications, and quotas. See the [channel guide](docs/multi-space-development.md) and [review and version record](docs/reports/2026-10-23-review.md). [Seven known issues](docs/known-issues.md) remain open for a later version; production deployment and business acceptance are still pending.
+
 The documents below are in Chinese.
 
 | Document | Contents |

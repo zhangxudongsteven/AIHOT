@@ -8,6 +8,9 @@ import { listedCondition, seatedCondition } from "./scope.ts";
 import { publicMatchCondition, searchTerms, withSearchCapacity } from "./pool.ts";
 import { sharedSearch } from "../lib/cache.ts";
 import { v1Payload, type V1ItemPayload } from "./publish.ts";
+import { publicationCacheKey, publicationConfig, publicationSpace, publicationSpaceId } from "./context.ts";
+import { itemUrl } from "./links.ts";
+import { publicationApiCategory } from "./taxonomy.ts";
 
 export interface V1ItemsQuery {
   mode: "selected" | "all";
@@ -36,14 +39,14 @@ export function rowToV1(row: ApiItemRow): V1ItemPayload {
 
 /** Search callers across HTTP and tools share one read. */
 export const v1Items = sharedSearch(
-  (q: V1ItemsQuery) => JSON.stringify([q.mode, q.window, q.by, q.category, q.q, q.limit, q.cursor]),
+  (q: V1ItemsQuery) => JSON.stringify([publicationCacheKey(), q.mode, q.window, q.by, q.category, q.q, q.limit, q.cursor]),
   queryItems, (q) => !!q.q?.trim(),
 );
 
 async function queryItems(query: V1ItemsQuery, now: Date): Promise<V1ItemsResult> {
   const windowMs = query.window === "24h" ? 86400000 : 7 * 86400000;
   const windowStart = new Date(now.getTime() - windowMs);
-  const binding = queryBinding({ m: query.mode, w: query.window, b: query.by, c: query.category, q: query.q });
+  const binding = queryBinding({ m: query.mode, w: query.window, b: query.by, c: query.category, q: query.q, ...(publicationSpaceId() === "default" ? {} : { space: publicationSpaceId() }) });
   // by=timeline is the site's own order: a selected item at its reading-group anchor, anything else at its timeline time.
   const sortCol = query.by === "published" ? sql`coalesce(p.published_at, p.discovered_at)` : query.mode === "selected" ? sql`p.sort_at` : sql`p.timeline_at`;
   let after: { a: number; i: string } | null = null;
@@ -93,24 +96,40 @@ const SYNC_PREFIX = "ax1"; // any other watermark answers 409
 
 const isWatermark = (value: number) => Number.isSafeInteger(value) && value >= 0;
 
-let epochCache: string | null = null;
+const epochCache = new Map<string, string>();
 
 /** Ledger epoch: changes whenever the ledger is rebuilt (e.g. after an import), invalidating old watermarks. */
 export async function ledgerEpoch(): Promise<string> {
-  if (epochCache) return epochCache;
-  const [row] = await sql<{ value: { epoch: string } }[]>`SELECT value FROM settings WHERE key = 'selected_ledger_epoch'`;
-  if (row) return (epochCache = row.value.epoch);
+  const id = publicationSpaceId();
+  const setting = id === "default" ? "selected_ledger_epoch" : `selected_ledger_epoch:${id}`;
+  const cached = epochCache.get(id);
+  if (cached) return cached;
+  const [row] = await sql<{ value: { epoch: string } }[]>`SELECT value FROM settings WHERE key = ${setting}`;
+  if (row) { epochCache.set(id, row.value.epoch); return row.value.epoch; }
   const epoch = newShortId(6);
-  await sql`INSERT INTO settings (key, value) VALUES ('selected_ledger_epoch', ${sql.json({ epoch })}) ON CONFLICT (key) DO NOTHING`;
-  const [again] = await sql<{ value: { epoch: string } }[]>`SELECT value FROM settings WHERE key = 'selected_ledger_epoch'`;
-  return (epochCache = again!.value.epoch);
+  await sql`INSERT INTO settings (key, value) VALUES (${setting}, ${sql.json({ epoch })}) ON CONFLICT (key) DO NOTHING`;
+  const [again] = await sql<{ value: { epoch: string } }[]>`SELECT value FROM settings WHERE key = ${setting}`;
+  epochCache.set(id, again!.value.epoch);
+  return again!.value.epoch;
 }
 
 /** The ledger's latest sequence: a snapshot and a page of changes read up to it. */
 export async function ledgerWatermark(): Promise<number> {
-  const [row] = await sql<{ w: number }[]>`SELECT coalesce(max(seq), 0) AS w FROM selected_ledger`;
+  const [row] = await sql<{ w: number }[]>`SELECT coalesce(max(seq), 0) AS w FROM selected_ledger WHERE space_id = ${publicationSpaceId()}`;
   return Number(row?.w ?? 0);
 }
+
+/** Stored payload links are rendered for this explicit outlet, not the publisher's process context. */
+function scopedPayload(item: V1ItemPayload): V1ItemPayload {
+  const space = publicationSpace();
+  const config = publicationConfig();
+  if (!space && !config) return item;
+  const aihot = itemUrl(item.id);
+  return { ...item, category: publicationApiCategory(item.category), links: { ...item.links, aihot }, attribution: { name: space?.name ?? config!.siteName, url: aihot } };
+}
+
+// Legacy tokens without a channel field belong only to the old default ledger.
+const cursorScopeMatches = (space: unknown) => space === publicationSpaceId() || (space === undefined && publicationSpaceId() === "default");
 
 function minimalOf(item: V1ItemPayload) {
   return {
@@ -140,13 +159,13 @@ export async function selectedSnapshot(q: SnapshotQuery, now = new Date()) {
   if (q.page !== null) {
     // A page token that is broken, empty or from another snapshot (a rebuilt ledger) cannot continue
     // this snapshot: the client starts it over (409 snapshot_required).
-    let p: { k: string; e: string; w: number; f: string; a: string; t: string };
+    let p: { k: string; e: string; w: number; f: string; a: string; t: string; s?: string };
     try {
       p = decodeCursor(SYNC_PREFIX, q.page);
     } catch {
       throw new SnapshotRequiredError("unreadable snapshot page token");
     }
-    if (p.k !== "page" || p.e !== epoch || (p.f !== "default" && p.f !== "minimal") || !isWatermark(p.w)
+    if (p.k !== "page" || !cursorScopeMatches(p.s) || p.e !== epoch || (p.f !== "default" && p.f !== "minimal") || !isWatermark(p.w)
       || typeof p.a !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(p.a)
       || typeof p.t !== "string" || !Number.isFinite(Date.parse(p.t))) {
       throw new SnapshotRequiredError("page token does not match this snapshot");
@@ -170,10 +189,11 @@ export async function selectedSnapshot(q: SnapshotQuery, now = new Date()) {
   const rows = await sql<{ article_id: string; payload: V1ItemPayload }[]>`
     SELECT latest.article_id, ${ledgerPayload(fields === "minimal", sql`latest.payload`)} AS payload FROM (
       SELECT DISTINCT ON (article_id) article_id, op, payload FROM selected_ledger
-      WHERE seq <= ${w} AND article_id > ${afterId}
+      WHERE space_id = ${publicationSpaceId()} AND seq <= ${w} AND article_id > ${afterId}
       ORDER BY article_id, seq DESC
     ) latest
-    JOIN selected_state st ON st.article_id = latest.article_id AND st.in_set
+    JOIN selected_state st ON st.article_id = latest.article_id AND st.space_id = ${publicationSpaceId()} AND st.in_set
+    JOIN publications p ON p.article_id = latest.article_id AND ${listedCondition(now)}
     WHERE latest.op = 'upsert'
     ORDER BY latest.article_id
     LIMIT ${q.limit + 1}`;
@@ -184,23 +204,23 @@ export async function selectedSnapshot(q: SnapshotQuery, now = new Date()) {
     schemaVersion: 1 as const,
     asOf,
     fields,
-    cursor: encodeCursor(SYNC_PREFIX, { k: "sync", e: epoch, w, f: fields }),
+    cursor: encodeCursor(SYNC_PREFIX, { k: "sync", s: publicationSpaceId(), e: epoch, w, f: fields }),
     count: page.length,
     hasMore,
-    nextPage: hasMore && last ? encodeCursor(SYNC_PREFIX, { k: "page", e: epoch, w, f: fields, a: last.article_id, t: asOf }) : null,
-    items: page.map((r) => (fields === "minimal" ? minimalOf(r.payload) : r.payload)),
+    nextPage: hasMore && last ? encodeCursor(SYNC_PREFIX, { k: "page", s: publicationSpaceId(), e: epoch, w, f: fields, a: last.article_id, t: asOf }) : null,
+    items: page.map((r) => (fields === "minimal" ? minimalOf(scopedPayload(r.payload)) : scopedPayload(r.payload))),
   };
 }
 
 export async function selectedChanges(q: { cursor: string; limit: number }, now = new Date()) {
   const epoch = await ledgerEpoch();
-  let c: { k: string; e: string; w: number; f: "default" | "minimal" };
+  let c: { k: string; e: string; w: number; f: "default" | "minimal"; s?: string };
   try {
     c = decodeCursor(SYNC_PREFIX, q.cursor);
   } catch {
     throw new SnapshotRequiredError("unknown watermark");
   }
-  if (c.k !== "sync" || c.e !== epoch || !isWatermark(c.w) || (c.f !== "default" && c.f !== "minimal")) {
+  if (c.k !== "sync" || !cursorScopeMatches(c.s) || c.e !== epoch || !isWatermark(c.w) || (c.f !== "default" && c.f !== "minimal")) {
     throw new SnapshotRequiredError("watermark from another ledger epoch or format");
   }
   const w = await ledgerWatermark();
@@ -211,21 +231,22 @@ export async function selectedChanges(q: { cursor: string; limit: number }, now 
     SELECT l.seq, l.article_id, CASE WHEN p.article_id IS NULL THEN 'remove' ELSE l.op END AS op, l.changed_at,
       CASE WHEN p.article_id IS NOT NULL THEN ${ledgerPayload(c.f === "minimal", sql`l.payload`)} END AS payload
     FROM selected_ledger l LEFT JOIN publications p ON p.article_id = l.article_id AND ${listedCondition(now)}
-    WHERE l.seq > ${c.w} AND l.seq <= ${w}
+    LEFT JOIN articles owner ON owner.id = l.article_id
+    WHERE l.space_id = ${publicationSpaceId()} AND (owner.id IS NULL OR owner.space_id = l.space_id) AND l.seq > ${c.w} AND l.seq <= ${w}
     ORDER BY l.seq LIMIT ${q.limit + 1}`;
   const page = rows.slice(0, q.limit);
   const hasMore = rows.length > q.limit;
-  const nextW = page.length ? page[page.length - 1]!.seq : Math.max(c.w, 0);
+  const nextW = hasMore ? page[page.length - 1]!.seq : w;
   return {
     schemaVersion: 1 as const,
     fields: c.f,
-    cursor: encodeCursor(SYNC_PREFIX, { k: "sync", e: epoch, w: nextW, f: c.f }),
+    cursor: encodeCursor(SYNC_PREFIX, { k: "sync", s: publicationSpaceId(), e: epoch, w: nextW, f: c.f }),
     count: page.length,
     hasMore,
     changes: page.map((r) =>
       r.op === "remove"
         ? { op: "remove" as const, changedAt: r.changed_at.toISOString(), id: r.article_id }
-        : { op: "upsert" as const, changedAt: r.changed_at.toISOString(), item: c.f === "minimal" ? minimalOf(r.payload!) : r.payload! },
+        : { op: "upsert" as const, changedAt: r.changed_at.toISOString(), item: c.f === "minimal" ? minimalOf(scopedPayload(r.payload!)) : scopedPayload(r.payload!) },
     ),
   };
 }

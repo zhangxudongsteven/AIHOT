@@ -57,14 +57,14 @@ export function publisherOwnsUrl(source: Publisher, rawUrl: string): boolean {
 
 /** The caller holds the article row lock. A provenance-only repair preserves the material revision. */
 export async function reconcileMaterialSource(db: Db, articleId: string, observed?: { sourceId: string; author?: string | null }): Promise<boolean> {
-  const [article] = await db<{ source_id: string; url: string; author: string | null; participation_mode: string; analyzed: boolean }[]>`
-    SELECT a.source_id, a.url, a.author, s.participation_mode,
+  const [article] = await db<{ space_id: string; source_id: string; url: string; author: string | null; participation_mode: string; analyzed: boolean }[]>`
+    SELECT a.space_id, a.source_id, a.url, a.author, s.participation_mode,
       EXISTS (SELECT 1 FROM analyses an WHERE an.article_id = a.id AND an.input_revision = a.revision AND an.relevance IS NOT NULL) AS analyzed
     FROM articles a JOIN sources s ON s.id = a.source_id WHERE a.id = ${articleId} FOR UPDATE OF a`;
   if (!article) return false;
   const candidates = await db<Publisher[]>`
     SELECT s.id, s.kind, s.config, s.participation_mode FROM sources s
-    WHERE s.tier = 'T1'
+    WHERE s.space_id = ${article.space_id} AND s.tier = 'T1'
       AND (s.config->'publisherRequiresDiscovery' IS DISTINCT FROM 'true'::jsonb
         OR EXISTS (SELECT 1 FROM article_discoveries d WHERE d.article_id = ${articleId} AND d.source_id = s.id))
       AND (jsonb_typeof(s.config->'publisherUrlPrefixes') = 'array'

@@ -76,6 +76,14 @@ jobs:
       # leaves empty; the smoke check then reads that empty database.
       - name: Backend tests
         run: npm test
+      # The DEV-02 design proof uses only transaction-local schemas in the same throwaway CI database.
+      - name: Multi-space design proof
+        env:
+          MULTI_SPACE_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: |
+          bash -n scripts/dev-database.sh
+          node node_modules/typescript/bin/tsc -p experiments/multi-space
+          node --test experiments/multi-space/proof.test.ts
       - name: Smoke check of the built site
         # The site itself runs with collection and model calls off (the tests above use local stubs).
         env:

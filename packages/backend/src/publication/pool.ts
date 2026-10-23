@@ -1,3 +1,5 @@
+import { publicationCacheKey } from "./context.ts";
+import { spaceCondition } from "./scope.ts";
 // Public pool (/all) with numeric pages, and search in its two orderings.
 import type { PoolResponse, TimelineFilters } from "@aihot/contracts/site";
 import { beijingDate, beijingMidnight } from "@aihot/contracts/time";
@@ -8,7 +10,7 @@ import {
   type ItemRow,
 } from "./items.ts";
 import { listedCondition } from "./scope.ts";
-import { TOPICS } from "./topics.ts";
+import { publicationTopics } from "./topics.ts";
 
 export const POOL_PAGE_SIZE = 40;
 export const POOL_MAX_PAGES = 50;
@@ -85,7 +87,7 @@ const normalizeAlias = (value: string) => value.trim().replace(/\s+/g, " ").toLo
 function queryEntityTag(q: string): string | null {
   const want = normalizeAlias(q);
   if (!want) return null;
-  const topic = TOPICS.find((t) => t.entityId && t.aliases.some((a) => normalizeAlias(a) === want));
+  const topic = publicationTopics().find((t) => t.entityId && t.aliases.some((a) => normalizeAlias(a) === want));
   return topic ? `entity:${topic.entityId}` : null;
 }
 
@@ -119,7 +121,7 @@ async function listedCount(f: TimelineFilters, now: Date): Promise<number> {
 }
 
 /** Without a search the total only sets the page count: it is reused for 30 seconds per filter. */
-const poolTotal = cachedByKey((f: TimelineFilters) => JSON.stringify([f.channel, f.category, f.tag]), (f) => listedCount(f, new Date()), { freshMs: 30_000, maxStaleMs: 30_000, maxKeys: 200 });
+const poolTotal = cachedByKey((f: TimelineFilters) => JSON.stringify([publicationCacheKey(), f.channel, f.category, f.tag]), (f) => listedCount(f, new Date()), { freshMs: 30_000, maxStaleMs: 30_000, maxKeys: 200 });
 
 export interface PoolQuery extends TimelineFilters {
   q?: string | null;
@@ -130,7 +132,7 @@ export interface PoolQuery extends TimelineFilters {
 
 // Identical searches share their read before taking search capacity.
 const searchPool = sharedSearch(
-  (q: PoolQuery) => JSON.stringify([q.channel, q.category, q.tag, q.q, q.tab, q.page]),
+  (q: PoolQuery) => JSON.stringify([publicationCacheKey(), q.channel, q.category, q.tag, q.q, q.tab, q.page]),
   queryPool, (q) => !!q.q?.trim(),
 );
 
@@ -229,7 +231,7 @@ async function queryPool(query: PoolQuery, now: Date): Promise<PoolResponse> {
   const meta = one(await sql<{ today_count: number; updated_at: Date | null }[]>`
     SELECT (SELECT count(*) FROM publications p
       WHERE ${listedCondition(now)} AND p.timeline_at >= ${beijingMidnight(today)} ${filters}) AS today_count,
-      (SELECT max(p.updated_at) FROM publications p WHERE p.eligible) AS updated_at`);
+      (SELECT max(p.updated_at) FROM publications p WHERE ${spaceCondition()} AND p.eligible) AS updated_at`);
 
   const holders = await seatHolders(rows, now);
   return {

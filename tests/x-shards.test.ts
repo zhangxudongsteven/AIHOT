@@ -11,6 +11,8 @@ import { upsertMaterial } from "@aihot/backend/content/materials";
 import { collectSource, collectXShard, scheduleDueSources } from "@aihot/backend/sources/collect";
 import { refreshSourceIcons } from "@aihot/backend/sources/icons";
 import { planXShards, shardQuery, selfThreadHandle, fetchXSearch } from "@aihot/backend/sources/x";
+import { defaultSpaceConfig, storeSpaceConfig } from "@aihot/backend/spaces/context";
+import { cutoverSpaceIdentity } from "../scripts/space-cutover.ts";
 
 const T = tag();
 const HANDLES = [`sa${T}`, `sb${T}`, `sc${T}`];
@@ -265,4 +267,29 @@ test("an account takes the avatar on its own latest post, whatever its name show
   await refreshSourceIcons();
   const [source] = await sql<{ icon_url: string | null }[]>`SELECT icon_url FROM sources WHERE id = ${id}`;
   assert.equal(source!.icon_url, "https://pbs.twimg.com/profile_images/1/own.jpg", "its own post's avatar, not a later post by someone else");
+});
+
+test("X collection assigns paid receipts to its space and rejects a mixed-space shard before a request", async () => {
+  await cutoverSpaceIdentity(sql);
+  const sources = [];
+  for (const name of ["a", "b"]) {
+    const spaceId = `x-space-${name}-${T}`;
+    await sql`INSERT INTO spaces (id, slug) VALUES (${spaceId}, ${spaceId})`;
+    const context = await storeSpaceConfig(spaceId, defaultSpaceConfig());
+    await sql`UPDATE spaces SET active_config_version = ${context.configVersion} WHERE id = ${spaceId}`;
+    const id = `source-${spaceId}`;
+    await sql`INSERT INTO sources (id, space_id, name, kind, config, tier, participation_mode, cursor, next_fetch_at)
+      VALUES (${id}, ${spaceId}, ${id}, 'x_search', ${sql.json({ query: `from:${HANDLES[0]} -filter:replies` })}, 'T2', 'hot_signal',
+        ${sql.json({ initializedAt: new Date().toISOString(), lastTweetId: String(WATERMARK) })}, '2100-01-01')`;
+    sources.push({ id, context });
+  }
+  for (const source of sources) {
+    assert.equal((await collectSource(source.id, { context: source.context })).status, "ok");
+    const receipts = await sql`SELECT space_id, config_version FROM receipts WHERE subject = ${`source:${source.id}`}`;
+    assert.ok(receipts.length > 0);
+    assert.ok(receipts.every((r) => r.space_id === source.context.spaceId && r.config_version === source.context.configVersion));
+  }
+  const before = socialdata.hits();
+  await assert.rejects(collectXShard("mixed", sources.map((s) => s.id), sources[0]!.context), /must belong to its space/);
+  assert.equal(socialdata.hits(), before, "invalid shard does not buy a request");
 });

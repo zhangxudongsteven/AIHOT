@@ -4,14 +4,18 @@
 // lost in transit and characters written as references are no revision (articles used to flip between
 // two versions on every fetch, a feed garbled a few characters differently on every load, and decoding
 // references would have sent every listed post stored with them back to analysis).
-import { tag } from "./setup.ts";
+import { gate, tag } from "./setup.ts";
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 import { closeDb, sql } from "@aihot/backend/db";
-import { upsertMaterial } from "@aihot/backend/content/materials";
+import { upsertMaterial, type MaterialInput } from "@aihot/backend/content/materials";
 import { readPublicationDate } from "@aihot/backend/sources/dates";
 import { loadAnalyzeInput, buildMaterial } from "@aihot/backend/editorial/input";
 import { identityKeyForUrl } from "@aihot/backend/lib/url";
+import { defaultSpaceConfig, storeSpaceConfig, type SpaceContext } from "@aihot/backend/spaces/context";
+import { storedDetails } from "@aihot/backend/sources/collect";
+import { cutoverSpaceIdentity } from "../scripts/space-cutover.ts";
 
 const SOURCE = `test-materials-${tag()}`;
 const OTHER = `test-materials-other-${tag()}`;
@@ -96,11 +100,59 @@ test("an imported article's first report records a baseline, not a revision", as
   assert.deepEqual([article!.revision, article!.processing_state], [2, "new"]);
 });
 
-test("simultaneous first reports of one URL create one article", async () => {
+/** Let every initial lookup see no row before releasing the competing inserts. */
+async function simultaneousReports(reports: Array<{ material: MaterialInput; context?: SpaceContext }>) {
+  const locked = gate<number>();
+  const release = gate();
+  const holding = sql.begin(async tx => {
+    await tx`LOCK TABLE articles IN SHARE MODE`;
+    const [session] = await tx<{ pid: number }[]>`SELECT pg_backend_pid() AS pid`;
+    locked.open(session!.pid);
+    await release.promise;
+  });
+  const blocker = await locked.promise;
+  const pending = Promise.all(reports.map(({ material, context }) => upsertMaterial(material, sql, context)));
+  try {
+    const deadline = performance.now() + 5000;
+    while (true) {
+      const [waiting] = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM pg_stat_activity WHERE ${blocker} = ANY(pg_blocking_pids(pid))`;
+      if (waiting!.n === reports.length) break;
+      if (performance.now() >= deadline) assert.fail('not all first reports reached the competing insert');
+      await Promise.race([pending.then(() => assert.fail('insert completed before the table lock was released')), delay(10)]);
+    }
+    release.open();
+    await holding;
+    return await pending;
+  } finally {
+    release.open();
+    await Promise.allSettled([holding, pending]);
+  }
+}
+
+test("simultaneous first reports of one URL create one article while the legacy unique key remains", async () => {
+  assert.ok((await sql`SELECT 1 FROM pg_constraint WHERE conname = 'articles_identity_key_key'`)[0]);
   const url = `https://example.com/new-${tag()}`;
-  const results = await Promise.all([1, 2, 3, 4, 5, 6].map(() => upsertMaterial({ sourceId: SOURCE, url, title: "New", excerpt: "new", via: "fetch" })));
+  const results = await simultaneousReports([1, 2, 3, 4, 5, 6].map(() => ({ material: { sourceId: SOURCE, url, title: "New", excerpt: "new", via: "fetch" } })));
   assert.equal(new Set(results.map((r) => r.articleId)).size, 1);
   assert.equal(results.filter((r) => r.created).length, 1);
+  assert.ok(results.every(r => !r.revised));
+  assert.equal((await state(results[0]!.articleId)).revision, 1);
+});
+
+test("before cutover foreign identities and conflicting imported IDs fail without reusing a foreign article", async () => {
+  const spaceId = `material-bridge-${tag()}`;
+  await sql`INSERT INTO spaces (id, slug) VALUES (${spaceId}, ${spaceId})`;
+  const context = await storeSpaceConfig(spaceId, defaultSpaceConfig());
+  await sql`UPDATE spaces SET active_config_version = ${context.configVersion} WHERE id = ${spaceId}`;
+  const sourceId = `source-${spaceId}`;
+  await sql`INSERT INTO sources (id, space_id, name, kind) VALUES (${sourceId}, ${spaceId}, 'Bridge source', 'rss')`;
+  const material = { sourceId: SOURCE, url: `https://example.com/bridge-${tag()}`, title: 'Original', via: 'fetch' as const };
+  const original = await upsertMaterial(material);
+  await assert.rejects(upsertMaterial({ ...material, sourceId, title: 'Foreign' }, sql, context), /space identity cutover/);
+  assert.equal((await sql`SELECT 1 FROM articles WHERE space_id = ${spaceId}`).length, 0);
+  assert.equal((await sql`SELECT 1 FROM article_discoveries WHERE source_id = ${sourceId}`).length, 0);
+  assert.equal((await state(original.articleId)).title, 'Original');
+  await assert.rejects(upsertMaterial({ ...material, id: original.articleId, url: `${material.url}-another` }), /Material ID .* already in use/);
 });
 
 test("another source listing the same article records a discovery, not a revision", async () => {
@@ -234,4 +286,52 @@ test("rereading an exact midnight upgrades day precision without a new revision"
   const [row] = await sql`SELECT publication_time, revision FROM articles WHERE id=${articleId}`;
   assert.equal(row!.publication_time, "2026-10-13T07:00:00.000Z");
   assert.equal(row!.revision, 1);
+});
+
+test("material identity, publisher ownership and revisions stay inside their space", async () => {
+  const legacy = await sql`SELECT id, source_id, identity_key, title, revision FROM articles ORDER BY id`;
+  await cutoverSpaceIdentity(sql);
+  assert.deepEqual(await sql`SELECT id, source_id, identity_key, title, revision FROM articles ORDER BY id`, legacy,
+    "cutover preserves legacy article IDs and content without rewriting history");
+  assert.equal((await cutoverSpaceIdentity(sql)).changed, false, "repeating a completed cutover is harmless");
+  const scopes = [];
+  const url = `https://publisher.example/space-${tag()}`;
+  for (const tier of ["T2", "T1"]) {
+    const spaceId = `material-space-${tag()}`;
+    await sql`INSERT INTO spaces (id, slug) VALUES (${spaceId}, ${spaceId})`;
+    const context = await storeSpaceConfig(spaceId, defaultSpaceConfig());
+    await sql`UPDATE spaces SET active_config_version = ${context.configVersion} WHERE id = ${spaceId}`;
+    const sourceId = `source-${spaceId}`;
+    await sql`INSERT INTO sources (id, space_id, name, kind, tier, config)
+      VALUES (${sourceId}, ${spaceId}, 'Scoped publisher', 'rss', ${tier}, ${sql.json({ publisherUrlPrefixes: ["https://publisher.example/"] })})`;
+    scopes.push({ context, sourceId });
+  }
+  const [a, b] = scopes;
+  const input = { url, title: "Original release", via: "fetch" as const, publishedAt: new Date() };
+  const concurrent = await simultaneousReports(scopes.flatMap(scope => [1, 2, 3].map(() => ({
+    material: { ...input, sourceId: scope.sourceId }, context: scope.context,
+  }))));
+  const first = concurrent[0]!;
+  const second = concurrent[3]!;
+  for (const results of [concurrent.slice(0, 3), concurrent.slice(3)]) {
+    assert.equal(new Set(results.map(r => r.articleId)).size, 1, 'concurrent first reports deduplicate inside each space after cutover');
+    assert.equal(results.filter(r => r.created).length, 1);
+    assert.ok(results.every(r => !r.revised));
+  }
+  assert.notEqual(first.articleId, second.articleId, "one URL has independent article IDs across spaces");
+  assert.equal((await upsertMaterial({ ...input, sourceId: a!.sourceId }, sql, a!.context)).articleId, first.articleId);
+  await upsertMaterial({ ...input, sourceId: a!.sourceId, title: "Revised release" }, sql, a!.context);
+  assert.deepEqual([(await state(first.articleId)).revision, (await state(second.articleId)).revision], [2, 1]);
+  const [owner] = await sql`SELECT source_id FROM articles WHERE id = ${first.articleId}`;
+  assert.equal(owner!.source_id, a!.sourceId, "a T1 publisher in another space cannot take attribution");
+  const identity = identityKeyForUrl(url)!;
+  assert.equal((await storedDetails([identity], a!.context.spaceId)).get(identity)?.title, "Revised release");
+  assert.equal((await storedDetails([identity], b!.context.spaceId)).get(identity)?.title, "Original release");
+  await assert.rejects(upsertMaterial({ ...input, sourceId: b!.sourceId }), /does not belong to space default/);
+  await assert.rejects(upsertMaterial({ ...input, sourceId: b!.sourceId }, sql, a!.context), /does not belong to space/);
+  await assert.rejects(sql`UPDATE articles SET source_id = ${b!.sourceId} WHERE id = ${first.articleId}`, { code: "23503" });
+  await assert.rejects(sql`INSERT INTO article_discoveries (space_id, article_id, source_id, via)
+    VALUES (${a!.context.spaceId}, ${first.articleId}, ${b!.sourceId}, 'forged')`, { code: "23503" });
+  const history = await sql`SELECT DISTINCT space_id FROM article_revisions WHERE article_id = ${first.articleId}`;
+  assert.deepEqual(history.map((r) => r.space_id), [a!.context.spaceId]);
 });

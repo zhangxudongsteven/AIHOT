@@ -7,7 +7,11 @@ import http from "node:http";
 import { after, before, test } from "node:test";
 import { closeDb, sql } from "@aihot/backend/db";
 import { upsertMaterial } from "@aihot/backend/content/materials";
-import { translateArticle, translatePending } from "@aihot/backend/editorial/translate";
+import { translateArticle, translatePending, translateQuotes } from "@aihot/backend/editorial/translate";
+import { configForContext, defaultSpaceConfig, resolveSpaceContext, storeSpaceConfig, type SpaceContext } from "@aihot/backend/spaces/context";
+import { withPublicationSpace } from "@aihot/backend/publication/context";
+import { loadItemDetail } from "@aihot/backend/publication/detail";
+import { itemFeed } from "@aihot/backend/publication/feeds";
 import { stopBoss } from "@aihot/backend/jobs/queue";
 import { autoReleaseUnknownReceipts } from "@aihot/backend/operations/recover";
 import { publishArticle } from "@aihot/backend/publication/publish";
@@ -421,10 +425,13 @@ test("account 429 pauses translation without spending the article attempts", asy
   await sql`INSERT INTO analyses(article_id,input_revision,origin,relevance,category,title_zh,summary_zh,reason_zh,score,selected)
     VALUES(${id},1,'rule','pass','ai-models','账户等待','摘要','理由',90,true)`;
   await publishArticle(id,{releasedAt:new Date(Date.now()-60_000)});
-  const original = process.env.TRANSLATE_MODEL;
+  const original = await resolveSpaceContext("default");
   const denied=await stub(()=>new Reply(429,{error:{code:"1113",message:"account unavailable"}}));
   pointModels(denied.url,["glm-5.3-flash"]);
-  process.env.TRANSLATE_MODEL="glm-5.3-flash";
+  const changed = structuredClone(configForContext(original));
+  changed.models.translate = "glm-5.3-flash";
+  const updated = await storeSpaceConfig("default", changed);
+  await sql`UPDATE spaces SET active_config_version = ${updated.configVersion} WHERE id = 'default'`;
   try {
     for (let run=0;run<3;run++) await translatePending({limit:1});
     assert.equal((await sql`SELECT 1 FROM translation_attempts WHERE article_id=${id}`).length,0);
@@ -436,7 +443,103 @@ test("account 429 pauses translation without spending the article attempts", asy
     assert.equal(restored.done.find(r=>r.articleId===id)?.status,"translated");
     assert.equal((await detail(id)).body.complete,true);
   } finally {
-    if(original===undefined) delete process.env.TRANSLATE_MODEL; else process.env.TRANSLATE_MODEL=original;
+    await sql`UPDATE spaces SET active_config_version = ${original.configVersion} WHERE id = 'default'`;
     await denied.close();
   }
+});
+
+async function translationChannel(label: string) {
+  const id = `translate-${tag()}`;
+  await sql`INSERT INTO spaces(id,slug) VALUES(${id},${id})`;
+  const pack = structuredClone(defaultSpaceConfig());
+  pack.siteName = label;
+  pack.prompts["translate-body"] += `\n${label}翻译要求。`;
+  pack.prompts["translate-post"] += `\n${label}翻译要求。`;
+  const context = await storeSpaceConfig(id, pack);
+  await sql`UPDATE spaces SET active_config_version=${context.configVersion} WHERE id=${id}`;
+  const source = `source-${tag()}`;
+  await sql`INSERT INTO sources(id,space_id,name,kind,tier,site_fulltext,syndicate_fulltext) VALUES(${source},${id},${label},'rss','T1',true,true)`;
+  return { context, source, label };
+}
+
+async function translationItem(f: { context: SpaceContext; source: string }, quoted?: { text: string; url: string }) {
+  const body = `A detailed announcement explaining the changes and the published availability for every interested reader ${tag()}.`;
+  const { articleId } = await upsertMaterial({ sourceId: f.source, url: `https://example.invalid/translation/${tag()}`,
+    title: "Translation fixture", language: "en", bodyText: body, bodyHtml: `<p>${body}</p>`, bodyStatus: "ok", via: "fetch",
+    publishedAt: new Date(), ...(quoted ? { xPost: { tweetId: tag(), authorName: "Fixture", handle: "fixture", text: "Try it!", quoted: { ...quoted, authorName: "Vendor", handle: "vendor" } } } : {}) }, sql, f.context);
+  await sql`INSERT INTO analyses(space_id,config_version,article_id,input_revision,origin,relevance,category,title_zh,summary_zh,selected,score)
+    VALUES(${f.context.spaceId},${f.context.configVersion},${articleId},1,'rule','pass','ai-models','频道翻译测试','摘要',true,90)`;
+  await publishArticle(articleId, { releasedAt: new Date(Date.now() - 60_000) });
+  if (quoted) await sql`UPDATE publications SET channel = 'x' WHERE article_id = ${articleId}`;
+  return articleId;
+}
+
+test("the same quoted post has independent channel translations, receipts and public full-text outputs", async () => {
+  // The natural key changes only in this isolated test database, as the controlled rollout does.
+  await sql`ALTER TABLE quote_translations DROP CONSTRAINT IF EXISTS quote_translations_pkey`;
+  const [a, b] = await Promise.all([translationChannel("频道甲"), translationChannel("频道乙")]);
+  const quote = { text: "The same vendor announcement is interpreted within each channel.", url: `https://x.com/vendor/status/7${Date.now()}` };
+  const [aId, bId] = await Promise.all([translationItem(a, quote), translationItem(b, quote)]);
+  const requests: string[] = [];
+  const model = await stub((_hit, request) => {
+    requests.push(request.body);
+    const system = JSON.parse(request.body).messages[0].content as string;
+    return { choices: [{ message: { content: JSON.stringify({ t: [system.includes("频道甲") ? "频道甲的译文" : "频道乙的译文"] }) } }] };
+  });
+  const original = process.env.DEEPSEEK_BASE_URL;
+  process.env.DEEPSEEK_BASE_URL = `${model.url}/v1`;
+  try {
+    assert.deepEqual(await Promise.all([translateQuotes({}, a.context), translateQuotes({}, b.context)]), [1, 1]);
+    assert.equal(await translateQuotes({}, a.context), 0);
+    assert.equal(model.hits(), 2);
+    for (const [f, id, own, other] of [[a, aId, "频道甲的译文", "频道乙的译文"], [b, bId, "频道乙的译文", "频道甲的译文"]] as const) {
+      const receipts = await sql`SELECT space_id,config_version FROM receipts WHERE space_id=${f.context.spaceId} AND purpose='translate_quoted'`;
+      assert.equal(receipts.length, 1);
+      assert.equal(receipts[0]!.config_version, f.context.configVersion);
+      await withPublicationSpace({ id: f.context.spaceId, slug: f.context.spaceId, configVersion: f.context.configVersion, name: f.label }, async () => {
+        const detail = await loadItemDetail(id);
+        assert.equal(detail.kind, "found");
+        if (detail.kind === "found") assert.equal(detail.item.x?.quoted?.translation, own);
+        const rss = await itemFeed("selected-full", null);
+        assert.ok(rss.includes(own)); assert.ok(!rss.includes(other));
+      });
+    }
+    assert.ok(requests.some(r => r.includes("频道甲翻译要求")) && requests.some(r => r.includes("频道乙翻译要求")));
+    const before = model.hits();
+    assert.equal((await translateArticle(aId, b.context)).status, "skipped");
+    assert.equal(model.hits(), before);
+  } finally { process.env.DEEPSEEK_BASE_URL = original; await model.close(); }
+});
+
+test("a changed translation configuration resets bounded attempts and a delayed older answer cannot replace it", async () => {
+  const f = await translationChannel("旧频道");
+  const id = await translationItem(f);
+  const entered = gate(); const released = gate();
+  const model = await stub(async (_hit, request) => {
+    const system = JSON.parse(request.body).messages[0].content as string;
+    const old = system.includes("旧频道");
+    if (old) { entered.open(); await released.promise; }
+    return { choices: [{ message: { content: JSON.stringify({ t: [old ? "旧配置译文" : "新配置译文"] }) } }] };
+  });
+  const original = process.env.DEEPSEEK_BASE_URL;
+  process.env.DEEPSEEK_BASE_URL = `${model.url}/v1`;
+  try {
+    const pending = translatePending({ limit: 1 }, f.context);
+    await entered.promise;
+    const pack = structuredClone(configForContext(f.context));
+    pack.prompts["translate-body"] = pack.prompts["translate-body"]!.replace("旧频道", "新频道");
+    const newer = await storeSpaceConfig(f.context.spaceId, pack);
+    await sql`UPDATE spaces SET active_config_version=${newer.configVersion} WHERE id=${newer.spaceId}`;
+    await sql`INSERT INTO translation_attempts(article_id,revision,attempts,outcome,reason,config_version)
+      VALUES(${id},1,3,'failed','old attempts',${f.context.configVersion})`;
+    assert.equal((await translatePending({ limit: 1 }, newer)).done[0]?.status, "translated");
+    released.open();
+    assert.equal((await pending).done[0]?.reason, "configuration changed");
+    const [translation] = await sql`SELECT body_text,config_version FROM translations WHERE article_id=${id}`;
+    assert.equal(translation!.body_text, "新配置译文");
+    assert.equal(translation!.config_version, newer.configVersion);
+    const [attempt] = await sql`SELECT attempts,config_version FROM translation_attempts WHERE article_id=${id}`;
+    assert.equal(attempt!.attempts, 1); assert.equal(attempt!.config_version, newer.configVersion);
+    assert.equal((await sql`SELECT 1 FROM receipts WHERE space_id=${f.context.spaceId} AND status='completed'`).length, 2);
+  } finally { released.open(); process.env.DEEPSEEK_BASE_URL = original; await model.close(); }
 });

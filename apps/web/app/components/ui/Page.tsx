@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
-import { Link } from "react-router";
+import { Link } from "../../lib/space-router";
 import { IconChevronRight } from "../icons";
 
 /**

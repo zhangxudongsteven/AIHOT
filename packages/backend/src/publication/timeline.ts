@@ -1,3 +1,4 @@
+import { publicationSpaceId } from "./context.ts";
 // Selected news timeline: ordinary reports fold by fact; standalone and independent-source articles
 // keep their own cards. Each ordinary fact stays at its first appearance.
 import type { GroupInfo, TimelineCard, TimelineFilters, TimelineResponse } from "@aihot/contracts/site";
@@ -28,7 +29,7 @@ function filterSql(q: TimelineQuery) {
 }
 
 function binding(q: TimelineQuery): string {
-  return queryBinding({ c: q.channel, k: q.category, t: q.tag });
+  return queryBinding({ space: publicationSpaceId(), c: q.channel, k: q.category, t: q.tag });
 }
 
 /**

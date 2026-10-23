@@ -6,12 +6,13 @@
 // "failed", which the admin re-queues in bulk.
 import type { PgBoss } from "pg-boss";
 import { sql, type Db } from "../db.ts";
+import { DEFAULT_SPACE_ID, resolveSpaceContext, type SpaceContext } from "../spaces/context.ts";
 import { extractArticleBody, pageFetchable } from "../content/extract.ts";
 import { analyzeArticle } from "../editorial/analyze.ts";
 import { isHistorical } from "../content/materials.ts";
 import { publishArticle } from "../publication/publish.ts";
 import { BudgetExceededError, failedReceiptId, failureKind } from "../providers/receipts.ts";
-import { enqueue, QUEUES, shutdownSignal, work } from "./queue.ts";
+import { enqueue, QUEUES, shutdownSignal, work, type ProcessingJobContext } from "./queue.ts";
 
 /** Minutes to wait after the n-th failed attempt; one more failure after the last ends in "failed". */
 const RETRY_MINUTES = [5, 10, 20, 40, 60, 120, 240, 360];
@@ -69,24 +70,42 @@ export function groupingPriority(a: { signal: boolean; historical: boolean }): n
  * (paid) request; the same tag reuses its receipt. With `db`, the job commits with the caller's write.
  * Posts of non-editorial sources skip the analysis queue: they only need recording and grouping.
  */
-export async function queueProcessing(articleId: string, opts: { step?: Step; attemptTag?: string; db?: Db } = {}): Promise<string | null> {
-  const db = opts.db ?? sql;
+export async function queueProcessing(articleId: string, opts: { step?: Step; attemptTag?: string; context?: SpaceContext; inputRevision?: number; generation?: number; db?: Db } = {}): Promise<string | null> {
+  if (!opts.db) return sql.begin(tx => queueProcessing(articleId, { ...opts, db: tx }));
+  const db = opts.db;
+  const [owner] = await db<{ space_id: string; processing_config_version: string | null; processing_attempt_tag: string | null; revision: number; processing_generation: number }[]>`
+    SELECT space_id, processing_config_version, processing_attempt_tag, revision, processing_generation FROM articles WHERE id = ${articleId} FOR UPDATE`;
+  if (!owner) return null;
+  if (opts.context && opts.context.spaceId !== owner.space_id) throw new Error("Processing space does not own article");
+  // A continuation may enqueue only the evaluation it observed. An older body-needed answer must
+  // never restore its configuration after an explicit re-evaluation has already started.
+  if ((opts.inputRevision !== undefined && opts.inputRevision !== owner.revision)
+    || (opts.generation !== undefined && opts.generation !== owner.processing_generation)
+    || ((opts.inputRevision !== undefined || opts.generation !== undefined) && opts.context && owner.processing_config_version !== null && owner.processing_config_version !== opts.context.configVersion)) return null;
   const r = await route(articleId, db);
   if (!r) return null;
   const step = opts.step ?? r.step;
-  const [queued] = await db<{ processing_attempt_tag: string | null }[]>`
-    UPDATE articles SET processing_queued_at = now(), processing_attempt_tag = coalesce(${opts.attemptTag ?? null}, processing_attempt_tag)
-    WHERE id = ${articleId} RETURNING processing_attempt_tag`;
+  if (opts.attemptTag && opts.attemptTag === owner.processing_attempt_tag && opts.context && owner.processing_config_version !== opts.context.configVersion) {
+    throw new Error("An existing evaluation tag cannot change configuration");
+  }
+  const newAttempt = opts.attemptTag !== undefined && opts.attemptTag !== owner.processing_attempt_tag;
+  const context = await resolveSpaceContext(owner.space_id, opts.context?.configVersion ?? (newAttempt ? undefined : owner.processing_config_version ?? undefined), db);
+  const [queued] = await db<{ processing_attempt_tag: string | null; revision: number; processing_generation: number; grouping_generation: number }[]>`
+    UPDATE articles SET processing_queued_at = now(), processing_attempt_tag = coalesce(${opts.attemptTag ?? null}, processing_attempt_tag),
+      processing_config_version = ${context.configVersion},
+      processing_generation = processing_generation + CASE WHEN ${newAttempt} OR (processing_config_version IS NOT NULL AND processing_config_version <> ${context.configVersion}) THEN 1 ELSE 0 END
+    WHERE id = ${articleId} RETURNING processing_attempt_tag, revision, processing_generation, grouping_generation`;
   if (!queued) return null;
   // Extraction and the sweep only carry articleId; retain the current evaluation's paid identity.
   const attemptTag = queued.processing_attempt_tag ?? undefined;
-  if (step === "extract") return enqueue(QUEUES.extractBody, { articleId }, { singletonKey: articleId, priority: r.historical ? PRIORITY.history : PRIORITY.live }, opts.db);
+  const singletonKey = `${context.spaceId}:${articleId}:r${queued.revision}:g${queued.processing_generation}`;
+  if (step === "extract") return enqueue(QUEUES.extractBody, { articleId }, { singletonKey, priority: r.historical ? PRIORITY.history : PRIORITY.live }, opts.db);
   if (r.signal && !attemptTag) {
-    return enqueue(QUEUES.group, { articleId, signalOnly: true }, { singletonKey: articleId, priority: groupingPriority(r) }, opts.db);
+    return enqueue(QUEUES.group, { articleId, signalOnly: true }, { singletonKey: `${singletonKey}:group${queued.grouping_generation}`, priority: groupingPriority(r) }, opts.db);
   }
   const tagged = !!attemptTag;
   return enqueue(QUEUES.analyze, tagged ? { articleId, attemptTag } : { articleId },
-    { singletonKey: tagged ? `manual:analyze:${articleId}:${attemptTag}` : articleId, priority: r.historical ? PRIORITY.history : PRIORITY.live }, opts.db);
+    { singletonKey: tagged ? `${singletonKey}:${attemptTag}` : singletonKey, priority: r.historical ? PRIORITY.history : PRIORITY.live }, opts.db);
 }
 
 /**
@@ -102,10 +121,15 @@ export function needsGrouping(m: { participationMode: string; historical: boolea
  * A post of a non-editorial source: recorded (hot_signal material only feeds heat; isolated material
  * never reaches public surfaces). Returns whether it is discussion evidence to group.
  */
-export async function settleNonEditorial(articleId: string): Promise<{ group: boolean }> {
+export async function settleNonEditorial(articleId: string, opts: ProcessingJobContext = {}): Promise<{ group: boolean }> {
   const [row] = await sql<{ participation_mode: string; backfill: boolean; published_at: Date | null; discovered_at: Date }[]>`
     UPDATE articles a SET processing_state = 'skipped', processing_attempts = 0, processing_retry_at = NULL, processing_queued_at = NULL
-    FROM sources s WHERE s.id = a.source_id AND a.id = ${articleId} AND s.participation_mode <> 'editorial'
+    FROM sources s WHERE s.id = a.source_id AND a.id = ${articleId} AND a.space_id = ${opts.context?.spaceId ?? DEFAULT_SPACE_ID} AND s.participation_mode <> 'editorial'
+      AND (${opts.inputRevision ?? null}::int IS NULL OR a.revision = ${opts.inputRevision ?? null})
+      AND (${opts.generation ?? null}::int IS NULL OR a.processing_generation = ${opts.generation ?? null})
+      AND (${opts.groupingGeneration ?? null}::int IS NULL OR a.grouping_generation = ${opts.groupingGeneration ?? null})
+      AND (${opts.context?.configVersion ?? null}::text IS NULL OR a.processing_config_version = ${opts.context?.configVersion ?? null}
+        OR (a.space_id = ${DEFAULT_SPACE_ID} AND a.processing_config_version IS NULL AND a.processing_generation = 0))
     RETURNING s.participation_mode, a.backfill, a.published_at, a.discovered_at`;
   if (!row) return { group: false };
   await publishArticle(articleId);
@@ -113,8 +137,8 @@ export async function settleNonEditorial(articleId: string): Promise<{ group: bo
 }
 
 async function processingInput(articleId: string) {
-  const [row] = await sql<{ participation_mode: string; revision: number; backfill: boolean; published_at: Date | null; discovered_at: Date }[]>`
-    SELECT s.participation_mode, a.revision, a.backfill, a.published_at, a.discovered_at FROM articles a JOIN sources s ON s.id = a.source_id WHERE a.id = ${articleId}`;
+  const [row] = await sql<{ space_id: string; processing_config_version: string | null; processing_generation: number; participation_mode: string; revision: number; backfill: boolean; published_at: Date | null; discovered_at: Date }[]>`
+    SELECT a.space_id, a.processing_config_version, a.processing_generation, s.participation_mode, a.revision, a.backfill, a.published_at, a.discovered_at FROM articles a JOIN sources s ON s.id = a.source_id WHERE a.id = ${articleId}`;
   return row ? { ...row, historical: isHistorical(row) } : null;
 }
 
@@ -123,51 +147,72 @@ async function processingInput(articleId: string) {
  * retry or end in "failed" (afterFailure). attemptTag makes an explicit re-evaluation a new (paid)
  * request; the same tag reuses its receipt.
  */
-export async function processArticle(articleId: string, opts: { attemptTag?: string } = {}): Promise<{ state: string; retryAt?: Date }> {
+export async function processArticle(articleId: string, opts: ProcessingJobContext & { attemptTag?: string } = {}): Promise<{ state: string; retryAt?: Date }> {
   const row = await processingInput(articleId);
   if (!row) return { state: "missing" };
+  if (row.space_id !== (opts.context?.spaceId ?? DEFAULT_SPACE_ID)) throw new Error("Processing space does not own article");
+  const context = await resolveSpaceContext(row.space_id, opts.context?.configVersion ?? row.processing_config_version ?? undefined);
+  if ((opts.inputRevision !== undefined && opts.inputRevision !== row.revision)
+    || (opts.generation !== undefined && opts.generation !== row.processing_generation)
+    || (row.processing_config_version && row.processing_config_version !== context.configVersion)) return { state: "stale" };
+  opts = { ...opts, context, inputRevision: row.revision, generation: row.processing_generation };
   try {
     return await processRevision(articleId, row, opts);
   } catch (error) {
-    return afterFailure(articleId, row.revision, error);
+    return afterFailure(articleId, row.revision, row.processing_generation, error);
   }
 }
 
-async function processRevision(articleId: string, row: NonNullable<Awaited<ReturnType<typeof processingInput>>>, opts: { attemptTag?: string }): Promise<{ state: string }> {
+async function processRevision(articleId: string, row: NonNullable<Awaited<ReturnType<typeof processingInput>>>, opts: ProcessingJobContext & { attemptTag?: string }): Promise<{ state: string }> {
   if (row.participation_mode !== "editorial") {
     // Normally queued straight for grouping (queueProcessing); an explicit re-evaluation lands here.
-    const { group } = await settleNonEditorial(articleId);
-    if (group) await enqueue(QUEUES.group, { articleId, signalOnly: true }, { singletonKey: articleId, priority: groupingPriority({ signal: true, historical: row.historical }) });
+    const { group } = await settleNonEditorial(articleId, opts);
+    if (group) await queueCurrentGrouping(articleId, { signal: true, historical: row.historical }, opts);
     return { state: "skipped" };
   }
   try {
-    const result = await analyzeArticle(articleId, { attemptTag: opts.attemptTag });
+    const result = await analyzeArticle(articleId, opts);
     if (!result) return { state: "missing" };
+    if (result.stale) return { state: "stale" }; // the newer revision has its own job
     // Only a title or a feed summary: the article page first; extraction queues the analysis again.
     if (result.needsBody || !result.output) {
-      await queueProcessing(articleId, { step: "extract" });
+      await queueProcessing(articleId, { step: "extract", context: opts.context, inputRevision: opts.inputRevision, generation: opts.generation });
       return { state: "fetching-body" };
     }
-    if (result.stale) return { state: "stale" }; // the newer revision has its own job
     await publishArticle(articleId);
-    if (needsGrouping({ participationMode: row.participation_mode, historical: row.historical, relevance: result.output.relevance })) await enqueue(QUEUES.group, { articleId }, { singletonKey: articleId, priority: groupingPriority({ signal: false, historical: row.historical }) });
+    if (needsGrouping({ participationMode: row.participation_mode, historical: row.historical, relevance: result.output.relevance })) await queueCurrentGrouping(articleId, { signal: false, historical: row.historical }, opts);
     await sql`UPDATE articles SET processing_attempts = 0, processing_retry_at = NULL, processing_queued_at = NULL
-              WHERE id = ${articleId} AND revision = ${row.revision}`;
+              WHERE id = ${articleId} AND revision = ${row.revision} AND processing_generation = ${row.processing_generation}`;
     return { state: result.output.relevance };
   } catch (error) {
     if (shutdownSignal.signal.aborted) throw error;
     if (failureKind(error) === "unknown") {
       // The provider may have billed this request: stop; ops.recover releases it once and requeues the article.
       await sql`UPDATE articles SET processing_state = 'failed', processing_error = ${`receipt ${failedReceiptId(error)} outcome unknown`}
-                WHERE id = ${articleId} AND revision = ${row.revision}`;
+                WHERE id = ${articleId} AND revision = ${row.revision} AND processing_generation = ${row.processing_generation}`;
       return { state: "unknown-receipt" };
     }
     throw error;
   }
 }
 
+/** The completed analysis hands off only its own evaluation, even if another regroup is already queued. */
+async function queueCurrentGrouping(articleId: string, priority: { signal: boolean; historical: boolean }, opts: ProcessingJobContext) {
+  return sql.begin(async tx => {
+    const [row] = await tx<{ grouping_generation: number }[]>`SELECT grouping_generation FROM articles
+      WHERE id = ${articleId} AND space_id = ${opts.context?.spaceId ?? DEFAULT_SPACE_ID}
+        AND revision = ${opts.inputRevision ?? 0} AND processing_generation = ${opts.generation ?? 0}
+        AND (processing_config_version IS NULL OR processing_config_version = ${opts.context?.configVersion ?? null}) FOR UPDATE`;
+    if (!row) return null;
+    const singletonKey = `${opts.context?.spaceId ?? DEFAULT_SPACE_ID}:${articleId}:r${opts.inputRevision}:g${opts.generation}:group${row.grouping_generation}`;
+    return enqueue(QUEUES.group, { articleId, ...(priority.signal ? { signalOnly: true } : {}), context: opts.context,
+      inputRevision: opts.inputRevision, generation: opts.generation, groupingGeneration: row.grouping_generation },
+      { singletonKey, priority: groupingPriority(priority) }, tx);
+  });
+}
+
 /** Waits and retries for passing trouble; marks "failed" for refusals and exhausted retries. */
-async function afterFailure(articleId: string, revision: number, error: unknown): Promise<{ state: string; retryAt?: Date }> {
+async function afterFailure(articleId: string, revision: number, generation: number, error: unknown): Promise<{ state: string; retryAt?: Date }> {
   // Let pg-boss retry this job after restart, reusing settled receipts. A deploy is not an article
   // failure and must neither consume processing_attempts nor turn an incomplete chain terminal.
   if (shutdownSignal.signal.aborted) throw error;
@@ -178,27 +223,27 @@ async function afterFailure(articleId: string, revision: number, error: unknown)
     const seconds = error instanceof BudgetExceededError ? error.retryAfterSeconds : 60;
     const retryAt = new Date(Date.now() + seconds * 1000);
     await sql`UPDATE articles SET processing_state = 'new', processing_error = ${message}, processing_retry_at = ${retryAt}, processing_queued_at = NULL
-              WHERE id = ${articleId} AND revision = ${revision}`;
+              WHERE id = ${articleId} AND revision = ${revision} AND processing_generation = ${generation}`;
     return { state: "waiting", retryAt };
   }
-  const [a] = await sql<{ processing_attempts: number }[]>`SELECT processing_attempts FROM articles WHERE id = ${articleId} AND revision = ${revision}`;
+  const [a] = await sql<{ processing_attempts: number }[]>`SELECT processing_attempts FROM articles WHERE id = ${articleId} AND revision = ${revision} AND processing_generation = ${generation}`;
   if (!a) return { state: "stale" };
   const attempts = a.processing_attempts + 1;
   const refused = kind === "refused";
   const exhausted = attempts > RETRY_MINUTES.length || (kind === "unusable" && attempts >= MAX_OUTPUT_FAILURES);
   if (refused || exhausted) {
     await sql`UPDATE articles SET processing_state = 'failed', processing_error = ${message}, processing_attempts = ${attempts},
-                processing_retry_at = NULL, processing_queued_at = NULL WHERE id = ${articleId} AND revision = ${revision}`;
+                processing_retry_at = NULL, processing_queued_at = NULL WHERE id = ${articleId} AND revision = ${revision} AND processing_generation = ${generation}`;
     return { state: "failed" };
   }
   const retryAt = new Date(Date.now() + RETRY_MINUTES[attempts - 1]! * 60_000);
   await sql`UPDATE articles SET processing_state = 'new', processing_error = ${message}, processing_attempts = ${attempts},
-              processing_retry_at = ${retryAt}, processing_queued_at = NULL WHERE id = ${articleId} AND revision = ${revision}`;
+              processing_retry_at = ${retryAt}, processing_queued_at = NULL WHERE id = ${articleId} AND revision = ${revision} AND processing_generation = ${generation}`;
   return { state: "retrying", retryAt };
 }
 
 export async function registerContentJobs(boss: PgBoss) {
-  await work(boss, QUEUES.analyze, { localConcurrency: 6, pollingIntervalSeconds: 2 }, ({ articleId, attemptTag }) => processArticle(articleId, { attemptTag }));
+  await work(boss, QUEUES.analyze, { localConcurrency: 6, pollingIntervalSeconds: 2 }, (data) => processArticle(data.articleId, data));
 }
 
 /**
@@ -206,15 +251,17 @@ export async function registerContentJobs(boss: PgBoss) {
  * on the excerpt it has ("unconfirmed" body, never a wrong one).
  */
 export async function registerExtractionJobs(boss: PgBoss) {
-  await work(boss, QUEUES.extractBody, { localConcurrency: 4, pollingIntervalSeconds: 2 }, async ({ articleId }) => {
-    const [input] = await sql<{ revision: number }[]>`SELECT revision FROM articles WHERE id = ${articleId}`;
-    if (!input) return { state: "missing" };
+  await work(boss, QUEUES.extractBody, { localConcurrency: 4, pollingIntervalSeconds: 2 }, async ({ articleId, context, generation, inputRevision }) => {
+    const [input] = await sql<{ revision: number }[]>`SELECT revision FROM articles WHERE id = ${articleId}
+      AND revision = ${inputRevision ?? 0} AND processing_generation = ${generation ?? 0}
+      AND (processing_config_version IS NULL OR processing_config_version = ${context?.configVersion ?? null})`;
+    if (!input) return { state: "stale" };
     try {
-      const state = await extractArticleBody(articleId);
+      const state = await extractArticleBody(articleId, { context, inputRevision, generation });
       // Extraction's failures do not count against the analysis that follows (a new revision starts over anyway).
-      if (state !== "skipped") await sql`UPDATE articles SET processing_attempts = 0, processing_retry_at = NULL WHERE id = ${articleId} AND revision = ${input.revision}`;
-      // A newer revision may still need a body after this task's result was discarded.
-      await queueProcessing(articleId);
+      if (state !== "skipped") await sql`UPDATE articles SET processing_attempts = 0, processing_retry_at = NULL WHERE id = ${articleId} AND revision = ${input.revision} AND processing_generation = ${generation ?? 0}`;
+      // Successful extraction may have made a new revision, but only this evaluation may continue.
+      await queueProcessing(articleId, { context, generation });
       return { state };
     } catch (error) {
       // A deploy is not the article's failure: pg-boss retries this job after the restart, as for analysis.
@@ -223,15 +270,15 @@ export async function registerExtractionJobs(boss: PgBoss) {
       const [a] = await sql<{ processing_attempts: number }[]>`
         UPDATE articles SET processing_attempts = processing_attempts + 1, processing_error = ${`extract: ${message}`},
           processing_queued_at = NULL, processing_retry_at = now() + interval '10 minutes'
-        WHERE id = ${articleId} AND revision = ${input.revision} AND body_status <> 'ok' RETURNING processing_attempts`;
+        WHERE id = ${articleId} AND revision = ${input.revision} AND processing_generation = ${generation ?? 0} AND body_status <> 'ok' RETURNING processing_attempts`;
       if (!a) {
-        await queueProcessing(articleId);
+        await queueProcessing(articleId, { context, generation });
         return { state: "skipped" };
       }
       if (a.processing_attempts < MAX_EXTRACT_FAILURES) return { state: "retrying" };
       await sql`UPDATE articles SET body_status = 'unconfirmed', processing_attempts = 0, processing_retry_at = NULL
-        WHERE id = ${articleId} AND revision = ${input.revision} AND body_status = 'pending'`;
-      await queueProcessing(articleId);
+        WHERE id = ${articleId} AND revision = ${input.revision} AND processing_generation = ${generation ?? 0} AND body_status = 'pending'`;
+      await queueProcessing(articleId, { context, generation });
       return { state: "unconfirmed" };
     }
   });
@@ -245,7 +292,7 @@ export async function registerExtractionJobs(boss: PgBoss) {
 export async function sweepUnprocessed(): Promise<{ enqueued: number }> {
   const rows = await sql<{ id: string }[]>`
     SELECT id FROM articles
-    WHERE processing_state = 'new' AND created_at < now() - interval '3 minutes'
+    WHERE processing_state = 'new' AND EXISTS (SELECT 1 FROM spaces WHERE spaces.id = articles.space_id AND spaces.enabled) AND created_at < now() - interval '3 minutes'
       AND (processing_retry_at IS NULL OR processing_retry_at <= now())
       AND (processing_queued_at IS NULL OR processing_queued_at < now() - ${QUEUED_STALE}::interval)
     ORDER BY discovered_at DESC LIMIT 500`;
@@ -264,11 +311,16 @@ const ARTICLE_STEPS = new Set(["prefilter_article", "score_article", "structure_
  * After a receipt is released (operations/recover.ts), the article that stopped on it goes straight
  * back to processing: one action, not two. Returns whether it was queued.
  */
-export async function resumeAfterRelease(receipt: { purpose: string; subject: string | null }, db: Db): Promise<boolean> {
-  const article = ARTICLE_STEPS.has(receipt.purpose) ? /^article:([^@:#]+)/.exec(receipt.subject ?? "")?.[1] : undefined;
-  if (!article) return false;
+export async function resumeAfterRelease(receipt: { id: number; purpose: string; subject: string | null; space_id?: string | null; config_version?: string | null }, db: Db): Promise<boolean> {
+  const subject = ARTICLE_STEPS.has(receipt.purpose) ? /^article:([^@:#]+)@([1-9]\d*)$/.exec(receipt.subject ?? "") : null;
+  if (!subject || !Number.isSafeInteger(Number(subject[2]))) return false;
+  const article = subject[1]!;
+  // A release belongs to the exact failure that stopped this revision. A newer evaluation may have
+  // failed for a different receipt (or reason); releasing history must not clear or wake that work.
   const [a] = await db`UPDATE articles SET processing_state = 'new', processing_attempts = 0, processing_retry_at = NULL, processing_error = NULL
-                        WHERE id = ${article} AND processing_state = 'failed' RETURNING id`;
+                        WHERE id = ${article} AND revision = ${Number(subject[2])} AND space_id = ${receipt.space_id ?? DEFAULT_SPACE_ID}
+                          AND (${receipt.config_version ?? null}::text IS NULL OR processing_config_version = ${receipt.config_version ?? null})
+                          AND processing_state = 'failed' AND processing_error = ${`receipt ${receipt.id} outcome unknown`} RETURNING id`;
   return !!a && !!(await queueProcessing(article, { step: "analyze", db }));
 }
 
@@ -283,7 +335,7 @@ export const failureGroupSql = (column = "processing_error") =>
 export async function requeueFailed(group: string | null): Promise<{ requeued: number }> {
   const rows = await sql<{ id: string }[]>`
     UPDATE articles SET processing_state = 'new', processing_attempts = 0, processing_retry_at = NULL, processing_error = NULL
-    WHERE processing_state = 'failed' AND discovered_at > now() - interval '30 days'
+    WHERE space_id = ${DEFAULT_SPACE_ID} AND processing_state = 'failed' AND discovered_at > now() - interval '30 days'
       AND (${group}::text IS NULL OR ${failureGroupSql()} = ${group})
     RETURNING id`;
   for (const r of rows.slice(0, 500)) await queueProcessing(r.id);

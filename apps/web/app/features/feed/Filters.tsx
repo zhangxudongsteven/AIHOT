@@ -1,8 +1,10 @@
+import { useSpace } from "../../lib/space";
+import { unscopedPath } from "../../lib/space-path";
 // Feed filters: the channel and category choice (a row of tabs on desktop, a sheet behind the bar's filter
 // button on phones), the phone bar of 精选 and 全部, and search.
 import { useEffect, useRef, useState } from "react";
-import { Form, Link, useNavigation, useSearchParams } from "react-router";
-import { CATEGORY_KEYS, CATEGORY_LABELS, CHANNEL_LABELS, type CategoryKey, type ChannelKey } from "@aihot/contracts/taxonomy";
+import { Form, Link, useNavigation, useSearchParams } from "../../lib/space-router";
+import { CHANNEL_LABELS, type CategoryKey, type ChannelKey } from "@aihot/contracts/taxonomy";
 import { SITE } from "@aihot/site";
 import { IconClose, IconFilter, IconSearch } from "../../components/icons";
 import { PillTabs } from "../../components/ui/Tabs";
@@ -29,11 +31,11 @@ function hrefWith(base: string, params: URLSearchParams, patch: Record<string, s
  * 一手 clears the category and picking a category clears 一手. Older 资讯 / X links still filter; the
  * choice then shows as none.
  */
-function filterOptions(base: string, params: URLSearchParams, noneLabel: string) {
+function filterOptions(base: string, params: URLSearchParams, noneLabel: string, categories: Array<{key: string; label: string}>) {
   return [
     { key: "all", label: noneLabel, to: hrefWith(base, params, { category: null, channel: null }) },
     { key: "firstParty", label: CHANNEL_LABELS.firstParty, to: hrefWith(base, params, { category: null, channel: "firstParty" }) },
-    ...CATEGORY_KEYS.map((k) => ({ key: k, label: CATEGORY_LABELS[k], to: hrefWith(base, params, { category: k, channel: null }) })),
+    ...categories.map(({ key, label }) => ({ key, label, to: hrefWith(base, params, { category: key, channel: null }) })),
   ];
 }
 
@@ -44,7 +46,8 @@ function filterKey(category: CategoryKey | null, channel: ChannelKey): string {
 /** Desktop: the filter as a row of tabs beside the search field. */
 export function CategoryTabs({ base, category, channel = "all", layoutId, className = "" }: { base: string; category: CategoryKey | null; channel?: ChannelKey; layoutId: string; className?: string }) {
   const [params] = useSearchParams();
-  return <PillTabs items={filterOptions(base, params, "全部").map(o => ({ ...o, prefetchOnPress: true }))} active={filterKey(category, channel)} layoutId={layoutId} label="筛选" className={className} />;
+  const { categories } = useSpace();
+  return <PillTabs items={filterOptions(base, params, "全部", categories).map(o => ({ ...o, prefetchOnPress: true }))} active={filterKey(category, channel)} layoutId={layoutId} label="筛选" className={className} />;
 }
 
 /**
@@ -94,10 +97,11 @@ export function FeedBar({ base, category, channel }: { base: "/" | "/all"; categ
 /** Phones: the filter as a sheet of options, the one in use ticked; choosing one applies it. */
 function FilterSheet({ open, onClose, base, active }: { open: boolean; onClose: () => void; base: string; active: string }) {
   const [params] = useSearchParams();
+  const { categories } = useSpace();
   return (
     <Sheet open={open} onClose={onClose} title="筛选">
       <ul className="mx-4 divide-y divide-line-soft">
-        {filterOptions(base, params, "不限").map((o) => {
+        {filterOptions(base, params, "不限", categories).map((o) => {
           const on = o.key === active;
           return (
             <li key={o.key}>
@@ -121,7 +125,8 @@ function FilterSheet({ open, onClose, base, active }: { open: boolean; onClose: 
 /** Phones: the filter and tag in use as chips under the bar; each one clears itself when tapped. */
 export function ActiveFilters({ base, category, channel, tag }: { base: string; category: CategoryKey | null; channel: ChannelKey; tag: string | null }) {
   const [params] = useSearchParams();
-  const label = channel === "firstParty" ? CHANNEL_LABELS.firstParty : category ? CATEGORY_LABELS[category] : null;
+  const { categories } = useSpace();
+  const label = channel === "firstParty" ? CHANNEL_LABELS.firstParty : category ? categories.find(c => c.key === category)?.label ?? category : null;
   if (!label && !tag) return null;
   const chip = "inline-flex min-h-11 max-w-full items-center gap-1 rounded-full bg-accent-soft pl-3 pr-2 text-[13px] font-medium text-accent transition-opacity active:opacity-60";
   return (
@@ -171,7 +176,7 @@ export function SearchField({ defaultValue = "", keep = {} }: { defaultValue?: s
   const inputRef = useRef<HTMLInputElement>(null);
   useEffect(() => setValue(defaultValue), [defaultValue]);
   useSlashFocus(inputRef);
-  const searching = navigation.state === "loading" && navigation.location?.pathname === "/all" && !!new URLSearchParams(navigation.location.search).get("q");
+  const searching = navigation.state === "loading" && unscopedPath(navigation.location?.pathname ?? "") === "/all" && !!new URLSearchParams(navigation.location.search).get("q");
   const hidden = Object.entries(keep).map(([k, v]) => (v ? <input key={k} type="hidden" name={k} value={v} /> : null));
 
   return (

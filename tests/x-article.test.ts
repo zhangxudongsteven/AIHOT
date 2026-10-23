@@ -64,7 +64,7 @@ after(async () => {
 test("a post that links an X Article waits for extraction, which brings the article in as a new revision", async () => {
   assert.equal((await collectXShard(`editorial:test-${T}`, [SOURCE])).status, "ok");
   const id = await idOf(WITH_ARTICLE);
-  const [queued] = await sql<{ name: string }[]>`SELECT name FROM pgboss.job WHERE singleton_key = ${id} ORDER BY created_on DESC LIMIT 1`;
+  const [queued] = await sql<{ name: string }[]>`SELECT name FROM pgboss.job WHERE data->>'articleId' = ${id} ORDER BY created_on DESC LIMIT 1`;
   assert.equal(queued?.name, "content.extract-body", "the article comes before judging");
 
   assert.equal(await extractArticleBody(id), "ok");

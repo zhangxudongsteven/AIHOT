@@ -1,3 +1,5 @@
+import { useSpaceFetch } from "../../lib/space";
+import { useSpace } from "../../lib/space";
 // The 精选 home's day-grouped feed: a time rail with cards on desktop, rows under grey day bars on phones.
 // Keeps its place across back navigation and loads further pages. There is no "new items" prompt:
 // readers refresh for the latest head — on phones also by tapping the tab again. The paged lists
@@ -14,7 +16,7 @@ import { EmptyState } from "../../components/ui/Page";
 import { beijingDate, beijingTime, beijingWeekday, monthDay } from "@aihot/contracts/time";
 import { byBeijingDay, weekdayShort } from "../../lib/format";
 import { isHydrated } from "../../lib/hydration";
-import { markRead, useReadSet } from "../../lib/local-state";
+import { markRead as markReadInSpace, useReadSet } from "../../lib/local-state";
 import { filterParams, listPath } from "../../lib/seo";
 import { isReload, readSnapshot, restoreAnchor, saveSnapshot, useSaveOnLeave } from "../../lib/restore";
 
@@ -132,6 +134,9 @@ export function TimelineSlot({ at, children, fresh = false, delay = 0, dataKey }
 }
 
 export function Timeline({ initial, filters }: { initial: TimelineResponse; filters: TimelineFilters }) {
+  const spaceFetch = useSpaceFetch();
+  const { slug } = useSpace();
+  const markRead = (id: string) => markReadInSpace(id, slug);
   const location = useLocation();
   const navigation = useNavigation();
   const readSet = useReadSet();
@@ -225,10 +230,10 @@ export function Timeline({ initial, filters }: { initial: TimelineResponse; filt
     setLoadingMore(true);
     setLoadError(false);
     try {
-      const res = await fetch(listPath("/api/site/timeline", { ...filterParams(filters), cursor: s.nextCursor }), { signal: controller.signal });
+      const res = await spaceFetch(listPath("/api/site/timeline", { ...filterParams(filters), cursor: s.nextCursor }), { signal: controller.signal });
       if (res.status === 400) {
         // Cursor no longer fits: start over from the head.
-        const head = await fetch(key, { signal: controller.signal });
+        const head = await spaceFetch(key, { signal: controller.signal });
         if (!head.ok) throw new Error(String(head.status));
         if (current()) setState(fromResponse((await head.json()) as TimelineResponse, stateRef.current.unreadOnly));
         return;

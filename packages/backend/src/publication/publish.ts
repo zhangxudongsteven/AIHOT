@@ -3,12 +3,16 @@
 // Rebuilding only re-reads stored results; it never calls a model.
 import { toPublicApiCategory } from "@aihot/contracts/taxonomy";
 import { SITE } from "@aihot/site";
+import { DEFAULT_SPACE_ID } from "../spaces/context.ts";
 import { one, sql, type Tx } from "../db.ts";
 import { sha256, stableJson } from "../lib/ids.ts";
 import { collapseWhitespace, isChineseText } from "../lib/text.ts";
 import type { XPostData } from "../content/materials.ts";
 import { originalPostCopy } from "../content/posts.ts";
 import { itemUrl } from "./links.ts";
+import { config } from "../config.ts";
+import { publicationConfig, publicationSpace } from "./context.ts";
+import { publicationApiCategory } from "./taxonomy.ts";
 import { pickRepresentative, REPRESENTATIVE_COLUMNS, type RepresentativeIdentity } from "./representative.ts";
 import { enqueue, QUEUES, shutdownSignal } from "../jobs/queue.ts";
 import { emit } from "../modules.ts";
@@ -18,6 +22,9 @@ import {
 import { foldableSelectionCondition, latestCompositeCondition, ownFactEvidenceCondition } from "./scope.ts";
 
 interface ArticleRow {
+  processing_generation: number;
+  processing_config_version: string | null;
+  space_id: string;
   id: string;
   source_id: string;
   url: string;
@@ -55,6 +62,7 @@ interface OverrideRow {
 }
 
 interface PublicationRow {
+  space_id: string;
   article_id: string;
   source_id: string;
   first_party: boolean;
@@ -133,8 +141,15 @@ function round1(n: number | null): number | null {
 export function v1Payload(p: {
   articleId: string; title: string; originalTitle: string | null; summary: string | null; sourceName: string; url: string;
   publishedAt: Date | null; discoveredAt: Date; category: string | null; score: number | null; selected: boolean; reason: string | null;
-}): V1ItemPayload {
-  const aihot = itemUrl(p.articleId);
+}, owner?: { id: string; slug: string; name: string; categories: { key: string }[] }): V1ItemPayload {
+  const space = owner ?? publicationSpace();
+  const merged = owner?.id === DEFAULT_SPACE_ID ? toPublicApiCategory(p.category) : null;
+  const category = owner
+    ? (merged && owner.categories.some(c => c.key === merged) ? merged : p.category) as V1ItemPayload["category"]
+    : publicationApiCategory(p.category);
+  const aihot = owner
+    ? `${config.siteUrl}${owner.id === DEFAULT_SPACE_ID ? "" : `/channels/${encodeURIComponent(owner.slug)}`}/items/${p.articleId}`
+    : itemUrl(p.articleId);
   return {
     id: p.articleId,
     title: p.title,
@@ -144,20 +159,20 @@ export function v1Payload(p: {
     links: { aihot, original: p.url },
     publishedAt: p.publishedAt ? p.publishedAt.toISOString() : null,
     discoveredAt: p.discoveredAt.toISOString(),
-    category: toPublicApiCategory(p.category),
+    category,
     score: p.score === null ? null : Math.round(p.score),
     selected: p.selected,
     reason: p.selected ? p.reason : null,
-    attribution: { name: SITE.name, url: aihot },
+    attribution: { name: space?.name ?? publicationConfig()?.siteName ?? SITE.name, url: aihot },
   };
 }
 
 /** Allocates the next ledger sequence under a transaction lock so sequence order equals commit order. */
-async function appendLedger(tx: Tx, articleId: string, op: "upsert" | "remove", payload: V1ItemPayload | null, now: Date): Promise<number> {
+async function appendLedger(tx: Tx, articleId: string, spaceId: string, op: "upsert" | "remove", payload: V1ItemPayload | null, now: Date): Promise<number> {
   await tx`SELECT pg_advisory_xact_lock(hashtext('selected_ledger'))`;
   const { next } = one(await tx<{ next: number }[]>`SELECT coalesce(max(seq), 0) + 1 AS next FROM selected_ledger`);
-  await tx`INSERT INTO selected_ledger (seq, article_id, op, changed_at, visible_at, payload)
-           VALUES (${next}, ${articleId}, ${op}, ${now}, ${now}, ${payload ? tx.json(payload as never) : null})`;
+  await tx`INSERT INTO selected_ledger (seq, article_id, space_id, op, changed_at, visible_at, payload)
+           VALUES (${next}, ${articleId}, ${spaceId}, ${op}, ${now}, ${now}, ${payload ? tx.json(payload as never) : null})`;
   return next;
 }
 
@@ -195,26 +210,27 @@ async function settleSeats(tx: Tx, factId: number | null, self: string | null, n
 async function syncLedger(tx: Tx, articleId: string, now: Date): Promise<"upsert" | "remove" | null> {
   const [p] = await tx<Array<{ selected: boolean; visibility: string; seat: boolean; title: string; original_title: string | null; summary: string | null;
     url: string; published_at: Date | null; discovered_at: Date; category: string | null; score: string | number | null; reason: string | null;
-    source_name: string }>>`
+    source_name: string; space_id: string; slug: string; name: string; categories: { key: string }[] }>>`
     SELECT p.selected, p.visibility, p.seat, p.title, p.original_title, p.summary, p.url, p.published_at, p.discovered_at, p.category,
-           p.score, p.reason, s.name AS source_name
-    FROM publications p JOIN sources s ON s.id = p.source_id WHERE p.article_id = ${articleId}`;
+           p.score, p.reason, s.name AS source_name, p.space_id, sp.slug, sc.config->>'siteName' AS name, sc.config->'categories' AS categories
+    FROM publications p JOIN sources s ON s.id = p.source_id JOIN spaces sp ON sp.id = p.space_id
+    JOIN space_configs sc ON sc.space_id = sp.id AND sc.config_version = sp.active_config_version WHERE p.article_id = ${articleId}`;
   if (!p) return null;
   const [state] = await tx<{ in_set: boolean; payload_hash: string | null }[]>`SELECT in_set, payload_hash FROM selected_state WHERE article_id = ${articleId}`;
   if (p.selected && p.visibility === "public" && p.seat) {
     const payload = v1Payload({
       articleId, title: p.title, originalTitle: p.original_title, summary: p.summary, sourceName: p.source_name, url: p.url,
       publishedAt: p.published_at, discoveredAt: p.discovered_at, category: p.category, score: p.score === null ? null : Number(p.score), selected: true, reason: p.reason,
-    });
+    }, { id: p.space_id, slug: p.slug, name: p.name, categories: p.categories });
     const payloadHash = sha256(stableJson(payload));
     if (state?.in_set && state.payload_hash === payloadHash) return null;
-    const seq = await appendLedger(tx, articleId, "upsert", payload, now);
-    await tx`INSERT INTO selected_state (article_id, in_set, payload_hash, last_seq) VALUES (${articleId}, true, ${payloadHash}, ${seq})
+    const seq = await appendLedger(tx, articleId, p.space_id, "upsert", payload, now);
+    await tx`INSERT INTO selected_state (article_id, space_id, in_set, payload_hash, last_seq) VALUES (${articleId}, ${p.space_id}, true, ${payloadHash}, ${seq})
              ON CONFLICT (article_id) DO UPDATE SET in_set = true, payload_hash = EXCLUDED.payload_hash, last_seq = EXCLUDED.last_seq`;
     return "upsert";
   }
   if (!state?.in_set) return null;
-  const seq = await appendLedger(tx, articleId, "remove", null, now);
+  const seq = await appendLedger(tx, articleId, p.space_id, "remove", null, now);
   await tx`UPDATE selected_state SET in_set = false, payload_hash = NULL, last_seq = ${seq} WHERE article_id = ${articleId}`;
   return "remove";
 }
@@ -222,7 +238,7 @@ async function syncLedger(tx: Tx, articleId: string, now: Date): Promise<"upsert
 export async function publishArticle(articleId: string, options: PublishOptions = {}): Promise<PublishResult | null> {
   return sql.begin(async (tx) => {
     await tx`SELECT 1 FROM articles WHERE id = ${articleId} FOR UPDATE`;
-    const [previous] = await tx<{ story_id: number | null }[]>`SELECT story_id FROM publications WHERE article_id = ${articleId}`;
+    const [previous] = await tx<{ story_id: number | null }[]>`SELECT story_id FROM publications WHERE article_id = ${articleId} AND space_id = ${DEFAULT_SPACE_ID}`;
     const result = await publishArticleTx(tx, articleId, options);
     // Body and translation writes announce their own changes; an unchanged projection needs no purge.
     if (previous && result?.changed) await emit("articleChanged", {
@@ -234,7 +250,7 @@ export async function publishArticle(articleId: string, options: PublishOptions 
 
 export async function publishArticleTx(tx: Tx, articleId: string, options: PublishOptions = {}): Promise<PublishResult | null> {
   const [article] = await tx<ArticleRow[]>`
-    SELECT id, source_id, url, title, language, published_at, discovered_at, timeline_at, backfill, body_status,
+    SELECT id, space_id, processing_generation, processing_config_version, source_id, url, title, language, published_at, discovered_at, timeline_at, backfill, body_status,
            body_text, x_post, x_article, grouped_at, grouping_status, selection_adds_value
     FROM articles WHERE id = ${articleId} FOR UPDATE`;
   if (!article) return null;
@@ -248,7 +264,9 @@ export async function publishArticleTx(tx: Tx, articleId: string, options: Publi
   if (!source) return null;
   const [analysis] = await tx<AnalysisRow[]>`
     SELECT id, relevance, category, tags, subjects, title_zh, summary_zh, reason_zh, score, selected
-    FROM analyses WHERE article_id = ${articleId} ORDER BY input_revision DESC, id DESC LIMIT 1`;
+    FROM analyses WHERE article_id = ${articleId} AND processing_generation = ${article.processing_generation}
+      AND (${article.processing_config_version}::text IS NULL OR config_version = ${article.processing_config_version}
+        OR (${article.space_id} = ${DEFAULT_SPACE_ID} AND config_version IS NULL AND processing_generation = 0)) ORDER BY input_revision DESC, id DESC LIMIT 1`;
   const [override] = await tx<OverrideRow[]>`SELECT fields, visibility FROM editorial_overrides WHERE article_id = ${articleId}`;
   const [membership] = await tx<{ fact_id: number; story_id: number | null }[]>`
     SELECT fa.fact_id, f.story_id FROM fact_articles fa JOIN facts f ON f.id = fa.fact_id
@@ -262,7 +280,7 @@ export async function publishArticleTx(tx: Tx, articleId: string, options: Publi
   for (const fact of seatFacts) await tx`SELECT pg_advisory_xact_lock(hashtext(${`seat:${fact}`}))`;
   // Reports wait for in-flight publication transactions before taking their candidate snapshot.
   // Stamp releases after all lock waits, which can cross an edition's cutoff.
-  await tx`SELECT pg_advisory_xact_lock_shared(hashtext('report_candidates'))`;
+  await tx`SELECT pg_advisory_xact_lock_shared(hashtext(${`report_candidates:${article.space_id}`}))`;
   const now = options.now ?? new Date();
 
   const f = override?.fields ?? {};
@@ -322,7 +340,7 @@ export async function publishArticleTx(tx: Tx, articleId: string, options: Publi
   }
 
   const next = {
-    source_id: source.id, first_party: source.tier === "T1",
+    space_id: article.space_id, source_id: source.id, first_party: source.tier === "T1",
     visibility, eligible, selected, selection_candidate: selectionCandidate, title: title ?? collapseWhitespace(article.title), original_title: originalTitle, summary, reason,
     category, tags, score: round1(score), body_mode: bodyMode, story_id: membership?.story_id ?? null, fact_id: membership?.fact_id ?? null,
     indexable, url: article.url, channel, syndicate, published_at: article.published_at, discovered_at: article.discovered_at,
@@ -352,10 +370,10 @@ export async function publishArticleTx(tx: Tx, articleId: string, options: Publi
   const revision = previous ? previous.revision + (changed ? 1 : 0) : 1;
 
   await tx`
-    INSERT INTO publications (article_id, analysis_id, revision, visibility, eligible, selected, selection_candidate, title, original_title, summary,
+    INSERT INTO publications (space_id, article_id, analysis_id, revision, visibility, eligible, selected, selection_candidate, title, original_title, summary,
       reason, category, tags, score, source_id, channel, first_party, url, published_at, discovered_at, timeline_at, backfill,
       selected_ready_at, visible_after, body_mode, syndicate, indexable, story_id, fact_id, search_text, sort_at, updated_at)
-    VALUES (${articleId}, ${analysis?.id ?? null}, ${revision}, ${visibility}, ${eligible}, ${selected}, ${selectionCandidate}, ${next.title},
+    VALUES (${article.space_id}, ${articleId}, ${analysis?.id ?? null}, ${revision}, ${visibility}, ${eligible}, ${selected}, ${selectionCandidate}, ${next.title},
       ${originalTitle}, ${summary}, ${reason}, ${category}, ${tags}, ${next.score}, ${source.id}, ${channel}, ${source.tier === "T1"},
       ${article.url}, ${article.published_at}, ${article.discovered_at}, ${article.timeline_at}, ${article.backfill},
       ${selectedReadyAt}, ${visibleAfter}, ${bodyMode}, ${syndicate}, ${indexable}, ${next.story_id}, ${next.fact_id}, ${searchText}, ${sortAt}, now())

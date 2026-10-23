@@ -1,9 +1,10 @@
+import { publicationSpaceId } from "../publication/context.ts";
 // Figures for the about page: how much the site covers, counted from the public read layer and kept for
 // ten minutes per process (the page itself is cached for five); an older copy is served while the
 // counts are read again, so no reader waits for the full-table counts.
 import type { SiteStats } from "@aihot/contracts/site";
 import { sql } from "../db.ts";
-import { cached } from "../lib/cache.ts";
+import { cachedByKey } from "../lib/cache.ts";
 import { publicSourceName } from "../publication/rules.ts";
 import { selectedCondition } from "../publication/scope.ts";
 
@@ -12,26 +13,26 @@ export type { SiteStats };
 /** How many sources the about page's river draws, at most. */
 const SAMPLE = 180;
 
-const stats = cached(() => querySiteStats(new Date()), { freshMs: 10 * 60_000, maxStaleMs: 60 * 60_000 });
+const stats = cachedByKey(() => publicationSpaceId(), () => querySiteStats(new Date()), { freshMs: 10 * 60_000, maxStaleMs: 60 * 60_000, maxKeys: 50 });
 
 export function loadSiteStats(): Promise<SiteStats> {
-  return stats.get();
+  return stats(undefined);
 }
 
 async function querySiteStats(now: Date): Promise<SiteStats> {
   const dayAgo = new Date(now.getTime() - 24 * 3600_000);
   const [[row], kinds, sample, latest] = await Promise.all([
     sql<Array<Omit<SiteStats, "sourceKinds" | "day" | "sampleSources" | "latest"> & { collected: number; selectedDay: number }>>`
-      SELECT (SELECT count(*) FROM sources WHERE enabled)::int AS sources,
-             (SELECT count(*) FROM publications p WHERE p.visibility <> 'withdrawn')::int AS items,
+      SELECT (SELECT count(*) FROM sources WHERE space_id = ${publicationSpaceId()} AND enabled)::int AS sources,
+             (SELECT count(*) FROM publications p WHERE p.space_id = ${publicationSpaceId()} AND p.visibility <> 'withdrawn')::int AS items,
              (SELECT count(*) FROM publications p WHERE ${selectedCondition(now)})::int AS selected,
-             (SELECT count(*) FROM reports WHERE kind = 'daily')::int AS dailies,
-             (SELECT count(*) FROM publications p WHERE p.visibility <> 'withdrawn' AND p.discovered_at > ${dayAgo})::int AS collected,
+             (SELECT count(*) FROM reports WHERE kind = 'daily' AND space_id = ${publicationSpaceId()})::int AS dailies,
+             (SELECT count(*) FROM publications p WHERE p.space_id = ${publicationSpaceId()} AND p.visibility <> 'withdrawn' AND p.discovered_at > ${dayAgo})::int AS collected,
              (SELECT count(*) FROM publications p WHERE ${selectedCondition(now)} AND p.timeline_at > ${dayAgo})::int AS "selectedDay"`,
-    sql<{ kind: string; n: number }[]>`SELECT kind, count(*)::int AS n FROM sources WHERE enabled GROUP BY kind ORDER BY kind`,
+    sql<{ kind: string; n: number }[]>`SELECT kind, count(*)::int AS n FROM sources WHERE space_id = ${publicationSpaceId()} AND enabled GROUP BY kind ORDER BY kind`,
     // A shuffle that holds for the day, so the river keeps its sources between visits.
     sql<{ name: string; kind: string; heat_only: boolean }[]>`
-      SELECT name, kind, participation_mode = 'hot_signal' AS heat_only FROM sources WHERE enabled
+      SELECT name, kind, participation_mode = 'hot_signal' AS heat_only FROM sources WHERE space_id = ${publicationSpaceId()} AND enabled
       ORDER BY md5(id::text || ${now.toISOString().slice(0, 10)}), id LIMIT ${SAMPLE}`,
     sql<{ id: string; title: string; source: string }[]>`
       SELECT p.article_id AS id, p.title, s.name AS source FROM publications p JOIN sources s ON s.id = p.source_id

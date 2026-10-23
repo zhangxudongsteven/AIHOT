@@ -2,7 +2,7 @@
 // once its own heading has scrolled up under the bar, or a switch that always shows; right: actions. Tab
 // pages also get a large title under the bar. Desktop pages keep their own headers.
 import { forwardRef, useEffect, useLayoutEffect, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
-import { useLocation, useNavigate } from "react-router";
+import { useLocation, useNavigate } from "../../lib/space-router";
 import { IconChevronLeft } from "../icons";
 import { historyIndex, previousScreen } from "./screens";
 import { markBack } from "./transitions";

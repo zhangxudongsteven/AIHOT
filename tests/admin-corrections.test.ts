@@ -4,13 +4,14 @@ import { tag } from "./setup.ts";
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
 import { sql, closeDb } from "@aihot/backend/db";
-import { createSource, updateSource } from "@aihot/backend/admin/sources";
+import { createSource, updateSource, sourceDetail, listSources, fetchNow } from "@aihot/backend/admin/sources";
 import { overrideFields, rerun, setSeoIndexed, setVisibility } from "@aihot/backend/admin/content";
 import { upsertMaterial } from "@aihot/backend/content/materials";
 import { publishArticle } from "@aihot/backend/publication/publish";
 import { getBoss, stopBoss } from "@aihot/backend/jobs/queue";
 import { sha256 } from "@aihot/backend/lib/ids";
 import { buildApp } from "../apps/api/src/app.ts";
+import { defaultSpaceConfig, storeSpaceConfig } from "@aihot/backend/spaces/context";
 
 const T = tag();
 const sourceId = `admin-${T}`;
@@ -47,6 +48,25 @@ test("concurrent source intake creates one source for the same feed", async () =
   const created = results.find((r) => r.created)!;
   assert.ok(created.created);
   for (const result of results) if (!result.created) assert.equal(result.duplicate.id, created.source.id);
+});
+
+test("source intake and legacy admin operations stay scoped even for the same feed", async () => {
+  const spaceId = `admin-space-${tag()}`;
+  await sql`INSERT INTO spaces (id, slug) VALUES (${spaceId}, ${spaceId})`;
+  const context = await storeSpaceConfig(spaceId, defaultSpaceConfig());
+  await sql`UPDATE spaces SET active_config_version = ${context.configVersion} WHERE id = ${spaceId}`;
+  const feed = { name: "Shared feed", kind: "rss", config: { feedUrl: `https://example.com/shared-${tag()}` } };
+  const own = await createSource({ ...feed, id: `source-${spaceId}` }, "test", context);
+  const legacy = await createSource({ ...feed, id: `source-default-${tag()}` }, "test");
+  assert.ok(own.created && legacy.created, "another space's feed is not a duplicate");
+  const duplicate = await createSource({ ...feed, id: `duplicate-${tag()}` }, "test", context);
+  assert.ok(!duplicate.created && duplicate.duplicate.id === own.source.id);
+  assert.equal(await sourceDetail(own.source.id), null);
+  assert.equal(await fetchNow(own.source.id, "test"), null);
+  assert.equal(await updateSource(own.source.id, { patch: { enabled: false }, version: new Date(own.source.updated_at).toISOString() }, "test"), null);
+  const scoped = await listSources({}, context);
+  assert.deepEqual(scoped.rows.map((row) => row.id), [own.source.id]);
+  assert.equal((await sourceDetail(own.source.id, context))?.source.enabled, true);
 });
 
 test("a source transaction rolled back at commit leaves no successful audit entry", async () => {

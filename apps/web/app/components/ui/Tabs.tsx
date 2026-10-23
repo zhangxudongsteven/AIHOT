@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, type ReactNode } from "react";
-import { Link } from "react-router";
+import { Link } from "../../lib/space-router";
 import { IntentLink } from "./IntentLink";
 import { useEntrance } from "../../lib/hydration";
 import { reducedMotion } from "../../lib/motion";

@@ -1,3 +1,6 @@
+import { nonDefaultSpace, withSpaceMeta } from "../lib/seo";
+import { useSpace } from "../lib/space";
+import type { Route } from "./+types/daily-archive";
 import { useLoaderData } from "react-router";
 import { IntentLink } from "../components/ui/IntentLink";
 import type { ReportIndexEntry, ReportIndexResponse } from "@aihot/contracts/site";
@@ -18,16 +21,19 @@ export { pageHeaders as headers } from "../lib/api.server";
 export const { clientLoader, shouldRevalidate } = pageReuse<typeof loader>();
 
 export async function loader({ request }: { request: Request }) {
-  const { items: index } = await apiGet<ReportIndexResponse>("/api/site/reports/daily", { signal: request.signal });
+  const { items: index } = await apiGet<ReportIndexResponse>("/api/site/reports/daily", { request, signal: request.signal });
   return cachedPage(600, { index, today: beijingDate(Date.now()) });
 }
 
-export function meta({ loaderData }: { loaderData?: { index: ReportIndexEntry[] } }) {
-  const entries = (loaderData?.index ?? []).map((e: ReportIndexEntry) => ({ path: `/daily/${e.key}`, name: e.title ? `${e.key} · ${e.title}` : `${SITE.name} 日报 · ${e.key}` }));
-  return pageMeta({ title: `${withSubject("日报")} · 历史存档`, description: `${SITE.name} 历史日报，按日期归档。`, path: "/daily/archive", image: "/og/pages/daily.png", jsonLd: archiveLd("/daily/archive", `${SITE.name} 日报 · 历史存档`, entries) });
+function routeMeta(args: Route.MetaArgs) {
+  const { loaderData } = args;
+  const space = nonDefaultSpace(args), name = space?.name ?? SITE.name;
+  const entries = (loaderData?.index ?? []).map((e: ReportIndexEntry) => ({ path: `/daily/${e.key}`, name: e.title ? `${e.key} · ${e.title}` : `${name} 日报 · ${e.key}` }));
+  return pageMeta({ title: `${space ? `${name} 日报` : withSubject("日报")} · 历史存档`, description: `${name} 历史日报，按日期归档。`, path: "/daily/archive", image: "/og/pages/daily.png", jsonLd: archiveLd("/daily/archive", `${name} 日报 · 历史存档`, entries) });
 }
 
 export default function DailyArchive() {
+  const { space, isDefault } = useSpace();
   const { index, today } = useLoaderData<typeof loader>();
   const months = archiveGroups("daily", index);
   return (
@@ -35,7 +41,7 @@ export default function DailyArchive() {
       <div className="@container">
         <header className="pt-5 lg:pt-0">
           <div className="flex items-center justify-between gap-4 text-[12px] text-ink-4">
-            <span>{`${SITE.name} · ${withSubject("日报")}`}</span>
+            <span>{`${space?.name ?? SITE.name} · ${isDefault ? withSubject("日报") : "日报"}`}</span>
             <span>
               共 <span className="num">{index[0]?.issueNumber ?? 0}</span> 期
             </span>
@@ -58,7 +64,7 @@ export default function DailyArchive() {
                     <span className="mt-1.5 text-[10.5px] leading-none text-ink-4">{weekdayShort(e.key)}</span>
                   </span>
                   <span className="min-w-0">
-                    <span className="block text-[15px] font-bold leading-[1.55] text-ink transition-colors group-hover:text-accent">{e.title ?? `${withSubject("日报")} ${e.key}`}</span>
+                    <span className="block text-[15px] font-bold leading-[1.55] text-ink transition-colors group-hover:text-accent">{e.title ?? `${isDefault ? withSubject("日报") : "日报"} ${e.key}`}</span>
                     {!!e.count && (
                       <span className="mt-1 block text-[12px] text-ink-4">
                         <span className="num">{e.count}</span>{` ${ENTRIES_UNIT}`}
@@ -74,3 +80,5 @@ export default function DailyArchive() {
     </ReportLayout>
   );
 }
+
+export const meta = withSpaceMeta(routeMeta);
