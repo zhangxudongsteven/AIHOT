@@ -132,12 +132,16 @@ DeepSeek 用于摘要、翻译、分类及候选字段抽取；实际影响范�
 
 ## 6. GKE 发布约束
 
+当前短期先采用 [MacBook Pro 单机部署](macbook-deployment.md)：原生 PostgreSQL 与应用在同一台 Mac，Compose 仅管理应用。以下约束用于后续迁往 GCP，不要求短期先建设 GKE。
+
 目标为 Web/API/worker 常驻工作负载、单次迁移 Job、Cloud SQL PostgreSQL 和内部入口。Cloud SQL 私网连通性、数据库账号权限、连接池与恢复需要独立验证；Auth Proxy 可以负责认证加密，但不代替网络连通配置。[Google 官方连接指南](https://docs.cloud.google.com/sql/docs/postgres/connect-kubernetes-engine)
+
+参考 Steven 的具体构建发布链路、首版拓扑及待实现文件见 [GCP 部署方案](gcp-deployment-plan.md)。
 
 1. **数据和身份**：确认项目/集群/区域，独立 namespace、ServiceAccount 与资源配额；优先工作负载身份和受控 Secret 注入。任何真实 Key 不进入 Git、镜像或日志。
 2. **数据库**：在 staging 完整执行历史及新增迁移，验证 `pg_trgm`、历史 `default_toast_compression=lz4`、pg-boss schema 权限；按实际进程总数计算连接预算，当前业务池默认 10、pg-boss 池另有 4，不能只用 `SELECT 1` 宣称兼容。[迁移](../database/migrations/0034_lz4_toast.sql)、[数据库连接](../packages/backend/src/db.ts)、[任务队列](../packages/backend/src/jobs/queue.ts)
-3. **共享目录**：API、worker、setup 使用同一个 `/data`。先验证满足需求的 RWX 文件系统；如不采用共享文件系统，须先完成相应业务文件的对象存储改造。不能给各 Pod 一个独立临时目录，也不直接假定 GCS 挂载具有全部 POSIX 语义。
-4. **发布顺序**：固定镜像 digest；备份 → 排空并停止旧应用 → 单次迁移/初始化 Job → 启动新版本 → smoke。首版使用维护窗口；数据库回退单独设计，镜像回滚不等于数据回滚。生产 seed 不默认导入 AI 行业示例源。
+3. **共享目录**：API、worker 及需要业务文件的初始化任务使用同一个 `/data`。API / worker 分为可跨节点调度的独立 Pod 时，先验证满足需求的 RWX 文件系统；首版也可将 API / worker 放在同一 Pod，共用 RWO 持久化磁盘，接受后端单副本和更新停机。若改用对象存储，须先完成业务文件接口改造。不能给各 Pod 一个独立临时目录，也不直接假定 GCS 挂载具有全部 POSIX 语义。
+4. **发布顺序**：固定镜像 digest；阻止新写入 → 排空并停止旧应用 → 最终数据库和文件备份 → 单次迁移/初始化 Job → 启动新版本 → smoke。首版使用维护窗口；数据库回退单独设计，镜像回滚不等于数据回滚。生产 seed 不默认导入 AI 行业示例源。
 5. **worker**：首版 1 副本、Recreate，依据现有 `515s` 停止宽限配置并演练排空；无证据前不增加 HPA 或多个常驻调度器。[Compose](../docker-compose.yml)、[调度](../apps/worker/src/schedules.ts)
 6. **探针**：区分进程存活、依赖就绪和 worker 活性。当前 `/api/health` 会访问数据库，不原样同时用作 liveness/readiness，避免短暂数据库故障引发全体重启。[API 健康接口](../apps/api/src/app.ts)
 7. **备份与恢复**：数据库和业务文件均可恢复，实际演练后确定 RPO/RTO。当前备份支持可配置 endpoint 的 S3-compatible/AWS SigV4 上传，不能沿用旧方案“仅 COS”的描述；它也不等于已支持原生 GCS/WIF，GCP 备份路径需单独验证。[备份实现](../packages/backend/src/operations/backup.ts)

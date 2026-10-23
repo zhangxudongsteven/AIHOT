@@ -11,21 +11,22 @@
 首个自维护开发基线为 **4.1.0**（提交 `b0ea3ed`），上游代码基线为 `b3998dc6fc138eb9659f33f55eb38c1c716f0d57`。这些版本记录只代表本项目，不代表上游发行版。
 
 - DEV-01～DEV-05 已接入频道配置快照、采集与处理上下文、网站切换及公开出口、独立报告、通知订阅和请求配额。
-- 本地完整后端回归 1025/1025、Web 回归 66/66 通过，详见[评审记录](docs/reports/2026-10-23-review.md)。
+- 本轮交接准备通过后端 1033/1033、Web 66/66、类型检查和构建，范围与首轮失败记录见[交接验证](docs/reports/2026-10-23-new-machine-handoff.md)；新机器仍需重新验证。此前结果见[评审记录](docs/reports/2026-10-23-review.md)和 [LAN 验证记录](docs/reports/2026-10-23-lan-deployment.md)。
 - 评审确认的 [7 项问题](docs/known-issues.md)仍待后续版本修复；完整测试通过不表示这些问题已经关闭。
-- 尚未部署生产或完成业务验收；正式安全证据、资产影响与处置流程、真实模型和推送联调、GKE 部署仍在后续计划中。
+- 已通过 TokenHub 完成一次真实 DeepSeek 请求、回执复用及配额验证，见[联调记录](docs/reports/2026-10-23-deepseek-integration.md)；完整内容流水线和飞书推送尚未验收，常驻外发保持关闭。
+- 短期在 MacBook Pro 原生运行 PostgreSQL 17，Compose 仅管理应用；[部署模板](docs/macbook-deployment.md)已准备，目标机器尚未部署。正式安全证据、资产影响与处置流程、业务验收及 GKE 部署仍待后续推进。
 
 ## 本地开发
 
 使用 Node.js 24、PostgreSQL 17 和 npm workspaces。完整初始化、私有连接文件及进程启动方式见[本地开发说明](docs/local-development.md)。开发时保持真实采集、模型调用、飞书和 IndexNow 外发关闭。
 
 ```bash
-git clone https://github.com/zhangxudongsteven/AIHOT.git
+git clone --branch codex/prepare-development https://github.com/zhangxudongsteven/AIHOT.git
 cd AIHOT
 npm ci
 ```
 
-在当前 checkout 的代码上开发；首次获取本版本时选择包含 `b0ea3ed` 的分支或提交。本地 commit 不代表远程已经可获取，远程可用性以实际 push 状态为准。
+在当前开发分支接续工作，完整的新机步骤见[新机器开发与部署](docs/new-machine-setup.md)。Git 只携带代码、模板和文档；数据库、文件卷和实际凭证需单独准备。远程分支以 `git ls-remote` / `git fetch` 核验，新机器不要直接使用仍停留在旧基线的默认分支。
 
 站点定制见[配置说明](docs/customize.md)，多频道配置、显式数据库切换和升级边界见[频道说明](docs/multi-space-development.md)。Docker 和其他部署方式见[部署文档](docs/deploy.md)。默认示范信源与行业配置不是已经批准的正式业务配置。
 
@@ -48,6 +49,7 @@ node scripts/smoke.ts --base http://127.0.0.1:3000
 | [CHANGELOG.md](CHANGELOG.md) | 本项目开发版本、未发布改动与升级摘要 |
 | [site/changelog.json](site/changelog.json) | 本站读者看到的更新日志，独立于上游历史 |
 | [开发计划](docs/development-plan.md) | 业务范围、开发阶段与尚缺输入 |
+| [新机器开发与部署](docs/new-machine-setup.md) | 获取当前分支、隔离开发/运行数据、恢复私有配置与验收 |
 | [已知问题](docs/known-issues.md) | MS-001～MS-007 的复现、影响和修复验收 |
 | [频道说明](docs/multi-space-development.md) | 配置、任务、公开出口、报告、推送及配额 |
 | [架构](docs/architecture.md) | Web/API/worker、模块、数据库迁移与公开读取层 |

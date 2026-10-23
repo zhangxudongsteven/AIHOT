@@ -11,21 +11,22 @@ The application collects sources, selects and writes content, groups events, and
 The first independently maintained development baseline is **4.1.0** at commit `b0ea3ed`, based on upstream commit `b3998dc6fc138eb9659f33f55eb38c1c716f0d57`. This is this project's version, not an upstream release.
 
 - DEV-01 through DEV-05 implement versioned channel configuration, scoped collection and processing, website navigation and public endpoints, independent reports, notification subscriptions, and request quotas.
-- Local checks passed: 1025/1025 backend tests and 66/66 web tests. See the [review record](docs/reports/2026-10-23-review.md).
+- Handoff checks passed: 1033/1033 backend tests, 66/66 Web tests, type checking, and the Web build. See the [handoff validation](docs/reports/2026-10-23-new-machine-handoff.md) for scope and initial failed runs. A new machine still requires validation; earlier results are in the [review record](docs/reports/2026-10-23-review.md) and [LAN validation record](docs/reports/2026-10-23-lan-deployment.md).
 - [Seven confirmed issues](docs/known-issues.md) remain open for a later version. Passing tests does not close them.
-- Production deployment and business acceptance remain pending, along with security evidence and asset-response workflows, real provider and notification integration, and GKE deployment.
+- One real DeepSeek request through TokenHub, receipt reuse, and quota enforcement have been verified; see the [integration record](docs/reports/2026-10-23-deepseek-integration.md). The full content pipeline and Feishu delivery remain unverified, and persistent external-action flags remain disabled.
+- The short-term target is a MacBook Pro with native PostgreSQL 17 and application-only Compose. The [deployment template](docs/macbook-deployment.md) is ready, but the target machine has not been deployed. Security evidence, asset-response workflows, business acceptance, and GKE deployment remain pending.
 
 ## Local development
 
 Use Node.js 24, PostgreSQL 17, and npm workspaces. Follow the [local development guide](docs/local-development.md) for database setup, private connection files, and process startup. Keep real collection, model calls, Feishu delivery, and IndexNow submission disabled during development.
 
 ```bash
-git clone https://github.com/zhangxudongsteven/AIHOT.git
+git clone --branch codex/prepare-development https://github.com/zhangxudongsteven/AIHOT.git
 cd AIHOT
 npm ci
 ```
 
-Select a branch or commit containing `b0ea3ed` when obtaining this version. A local commit does not establish that the revision has been pushed to the remote.
+Continue on this development branch using the [new-machine guide](docs/new-machine-setup.md). Git contains code, templates, and documentation; databases, file volumes, and credentials require separate preparation. Verify the remote branch with `git ls-remote` or `git fetch` instead of using the default branch's older baseline.
 
 See the [customization guide](docs/customize.md), [channel guide](docs/multi-space-development.md), and [deployment guide](docs/deploy.md) for configuration and upgrade requirements. Example industry data and sources are not approved production configuration.
 
@@ -49,6 +50,7 @@ The detailed documents are in Chinese.
 | [site/changelog.json](site/changelog.json) | Updates displayed to this site's readers |
 | [Maintenance policy](docs/fork-maintenance.md) | Independent versioning, upstream references, and release records |
 | [Development plan](docs/development-plan.md) | Scope, milestones, and pending business inputs |
+| [New-machine setup](docs/new-machine-setup.md) | Fetching the development branch, isolating data, restoring private configuration, and validation |
 | [Known issues](docs/known-issues.md) | Reproduction, impact, and acceptance criteria for MS-001 through MS-007 |
 | [Channel guide](docs/multi-space-development.md) | Configuration, processing, public endpoints, reports, notifications, and quotas |
 | [Architecture](docs/architecture.md) | Web/API/worker, modules, migrations, and the public read layer |

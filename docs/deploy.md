@@ -2,6 +2,14 @@
 
 本文适用于本项目的独立维护版本。当前开发基线为 4.1.0；发布范围见 [CHANGELOG.md](../CHANGELOG.md)，仓库及版本约定见[独立维护说明](fork-maintenance.md)。以下保留了继承自上游的部署方法和历史升级注意事项，历史说明不代表本站已部署。
 
+从另一台机器接续工作，先读[新机器开发与部署](new-machine-setup.md)，获取当前分支并准备独立的私有配置与数据。新生成的 `.env` 默认关闭采集和模型调用。
+
+当前短期目标是 [MacBook Pro 单机部署](macbook-deployment.md)：PostgreSQL 17 原生安装在同一台 Mac，独立于 Compose 管理；应用复用 `compose.lan.yml`，通过 `deploy/macbook.env.example` 配置宿主机连接。Compose 仅运行 Web、API、worker 和临时迁移工具，不使用下方自带数据库的默认方案。
+
+调试服务器 `172.16.0.17` 复用现有 PostgreSQL 时，使用独立的 [LAN 部署说明](lan-deployment.md)、`compose.lan.yml` 和 `scripts/deploy-lan.sh`。该入口不启动数据库、不导入示范源，采集、模型和推送固定关闭；不要直接套用下方自带数据库的 Compose 启动命令。
+
+部署到 GCP / GKE 时，参考 [GCP 部署方案](gcp-deployment-plan.md)：沿用 Steven 的 Cloud Build / Cloud Deploy 链路，并处理共享文件、单次迁移和 worker 排空。该文档目前是待实现方案，不代表已有可执行的 GKE 配置或已完成云上部署。
+
 ## 用 Docker（推荐）
 
 需要一台装了 Docker（带 Compose）的机器。云服务器建议至少 2 核、4 GB 内存，构建镜像时要用到。
@@ -28,7 +36,7 @@ RSS、分享链接、站点地图和 Agent Markdown 中的绝对链接都使用�
 docker compose up -d --build
 ```
 
-启动后打开 `http://服务器地址:3000`，后台在 `/admin`，用管理员密码登录。第一次启动会导入示范信源，一两分钟后开始出现内容；第一次导入的一百多条资料大约半小时处理完（每条都要预筛、评分、结构化、写标题摘要，再归组）。
+启动后打开 `http://服务器地址:3000`，后台在 `/admin`，用管理员密码登录。此默认 Compose 第一次会导入示范信源配置，但新生成的 `.env` 关闭采集和模型调用，不会因此产生文章。完成信源确认、模型联调与预算配置后，才显式启用相应开关；Mac / LAN 应用专用 Compose 不导入示范信源。
 
 `docker compose` 会起五个容器：`db`（PostgreSQL 17）、`setup`（每次启动先跑数据库迁移和种子数据，然后退出）、`api`、`worker`（抓取、模型处理、定时任务）、`web`（网页）。`web` 只接收网站地址、API 地址等网页配置，通过 HTTP 读取 API；数据库、模型和管理员密钥，以及数据卷，只交给后端容器。
 

@@ -1,0 +1,127 @@
+# Standalone LAN deployment; do not combine with docker-compose.yml.
+# scripts/deploy-lan.sh runs setup on every deployment before starting the application.
+name: myhot-lan
+
+x-app: &app
+  build: .
+  image: myhot-lan-app:${AIHOT_RELEASE:-dev}
+  restart: unless-stopped
+
+x-backend: &backend
+  <<: *app
+  # Explicit allowlist: local development bypasses and external-service credentials stay out.
+  environment: &backend-env
+    NODE_ENV: production
+    AIHOT_ENVIRONMENT: development
+    AIHOT_RELEASE: ${AIHOT_RELEASE:-dev}
+    DATABASE_URL: ${DATABASE_URL:-postgres://myhot@172.16.0.17:5432/myhot}
+    PGPASSWORD: ${PGPASSWORD:?Set PGPASSWORD in the private LAN environment file}
+    # At least 2 connections are required by the migration bootstrap (MS-006).
+    DATABASE_POOL_MAX: ${DATABASE_POOL_MAX:-4}
+    AIHOT_DATA_DIR: /data
+    API_BASE_URL: http://api:3001
+    SITE_URL: ${SITE_URL:-http://172.16.0.17:3000}
+    ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set a server-specific ADMIN_PASSWORD of at least 12 characters}
+    SESSION_SECRET: ${SESSION_SECRET:?Set a server-specific SESSION_SECRET}
+    IMG_PROXY_SIGN_SECRET: ${IMG_PROXY_SIGN_SECRET:?Set a server-specific IMG_PROXY_SIGN_SECRET}
+    LOG_LEVEL: ${LOG_LEVEL:-info}
+    TRUST_PROXY: "false"
+    ALLOW_PRIVATE_NETWORK_FETCH: "false"
+    # These are intentionally literal: shell or dotenv values cannot enable external actions.
+    COLLECT_ENABLED: "false"
+    MODEL_CALLS_ENABLED: "false"
+    FEISHU_CONTENT_PUSH_ENABLED: "false"
+    FEISHU_INTERNAL_ENABLED: "false"
+    INDEXNOW_SUBMIT_ENABLED: "false"
+  volumes:
+    - data:/data
+
+services:
+  # Explicit one-shot invocation; never imports the example sources.
+  setup:
+    <<: *backend
+    profiles: [tools]
+    restart: "no"
+    command: [node, scripts/migrate.ts]
+
+  api:
+    <<: *backend
+    command: [node, apps/api/src/main.ts]
+    environment:
+      <<: *backend-env
+      API_HOST: 0.0.0.0
+      API_PORT: "3001"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - --input-type=module
+        - -e
+        - >-
+          const r = await fetch('http://127.0.0.1:3001/api/health', {signal: AbortSignal.timeout(5000)});
+          if (!r.ok || !(await r.json()).ok) process.exit(1);
+      interval: 15s
+      timeout: 10s
+      start_period: 30s
+      retries: 5
+
+  worker:
+    <<: *backend
+    command: [node, apps/worker/src/main.ts]
+    # Let the worker drain backups and paid calls before closing its database connections.
+    stop_grace_period: 515s
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - --input-type=module
+        - -e
+        - >-
+          import {hostname} from 'node:os';
+          import {sql, closeDb} from '@aihot/backend/db';
+          try {
+            const [row] = await sql.unsafe("SELECT value FROM settings WHERE key = 'heartbeat.worker'");
+            const beat = row?.value;
+            if (beat?.host !== hostname() || !(Date.now() - Date.parse(beat?.at) < 180000)) process.exitCode = 1;
+          } finally { await closeDb(); }
+      interval: 30s
+      timeout: 15s
+      start_period: 60s
+      retries: 3
+
+  web:
+    <<: *app
+    command: [node, apps/web/server.ts]
+    # SSR reads the API over HTTP. Database credentials and stored files stay in the backend.
+    environment:
+      NODE_ENV: production
+      API_BASE_URL: http://api:3001
+      SITE_URL: ${SITE_URL:-http://172.16.0.17:3000}
+      TRUST_PROXY: "false"
+      AIHOT_RELEASE: ${AIHOT_RELEASE:-dev}
+      WEB_HOST: 0.0.0.0
+      WEB_PORT: "3000"
+    ports:
+      - "${PORT:-172.16.0.17:3000}:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - --input-type=module
+        - -e
+        - >-
+          const r = await fetch('http://127.0.0.1:3000/', {signal: AbortSignal.timeout(5000)});
+          if (!r.ok || !r.headers.get('content-type')?.includes('text/html')) process.exit(1);
+      interval: 15s
+      timeout: 10s
+      start_period: 30s
+      retries: 5
+
+volumes:
+  data: {}
