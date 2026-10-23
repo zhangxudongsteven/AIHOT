@@ -1,3 +1,4 @@
+import { publicationCacheKey, publicationSpace, publicationSpaceId, publicationPath } from "./context.ts";
 // The latest hot ranking through the public read layer. A stored entry is shown only while its
 // representative is still listed evidence of the story (regrouping or a withdrawal can undo it before
 // the next ranking); the web shows heat values, machine exits only ranks (stories.ts).
@@ -11,7 +12,7 @@ import { evidenceCondition, listedCondition } from "./scope.ts";
 import { storyTexts } from "./story-text.ts";
 
 // Concurrent reads are shared, nothing more: public words follow withdrawals and regrouping at once.
-const ranking = shared<void, HotRanking | null>(() => "latest", queryLatestHotRanking);
+const ranking = shared<void, HotRanking | null>(publicationCacheKey, queryLatestHotRanking);
 
 export function latestHotRanking(): Promise<HotRanking | null> {
   return ranking();
@@ -20,16 +21,17 @@ export function latestHotRanking(): Promise<HotRanking | null> {
 /** Search links follow the same current public evidence as every hot-ranking surface. */
 export async function hotSearchLinks() {
   const ranking = await latestHotRanking();
-  return (ranking?.entries ?? []).slice(0, 5).map(e => ({ rank: e.rank, title: e.title, to: `/story/${e.storyPublicId}` }));
+  return (ranking?.entries ?? []).slice(0, 5).map(e => ({ rank: e.rank, title: e.title, to: publicationPath(`/story/${e.storyPublicId}`) }));
 }
 
 async function queryLatestHotRanking(): Promise<HotRanking | null> {
-  const row = await storedHotRanking();
+  const space = publicationSpace();
+  const row = await storedHotRanking(sql, space ? { context: { spaceId: space.id, configVersion: space.configVersion } } : {});
   if (!row) return null;
   const now = new Date();
   const entries = row.entries;
-  const current = entries.length ? await sql<{ story_id: number; article_id: string; story_title: string; url: string; source_name: string; latest_at: Date }[]>`
-    SELECT DISTINCT ON (f.story_id, p.article_id) f.story_id, p.article_id, st.title AS story_title, p.url, s.name AS source_name,
+  const current = entries.length ? await sql<{ story_id: number; article_id: string; story_title: string; story_public_id: string; url: string; source_name: string; latest_at: Date }[]>`
+    SELECT DISTINCT ON (f.story_id, p.article_id) f.story_id, p.article_id, st.title AS story_title, st.public_id::text AS story_public_id, p.url, s.name AS source_name,
       latest.at AS latest_at
     FROM facts f JOIN stories st ON st.id = f.story_id JOIN fact_articles fa ON fa.fact_id = f.id JOIN publications p ON p.article_id = fa.article_id
     JOIN sources s ON s.id = p.source_id
@@ -41,12 +43,14 @@ async function queryLatestHotRanking(): Promise<HotRanking | null> {
     WHERE f.story_id IN ${sql(entries.map((entry) => entry.storyId))} AND p.article_id IN ${sql(entries.map((entry) => entry.representativeItemId ?? ""))}
       AND ${evidenceCondition()} AND ${listedCondition(now)}
     ORDER BY f.story_id, p.article_id, (fa.role = 'primary') DESC, f.id` : [];
+  const ownedNames = new Set((await sql<{ name: string }[]>`SELECT name FROM sources WHERE space_id = ${publicationSpaceId()}`).map(source => source.name));
   const valid = new Map(current.map((report) => [`${report.story_id}:${report.article_id}`, report]));
   // Regrouping can invalidate a saved representative before the next heat refresh. Do not link the
   // event to a report it no longer holds; the next normal ranking can choose its replacement.
   const visible = entries.flatMap((entry) => {
     const report = valid.get(`${entry.storyId}:${entry.representativeItemId}`);
-    return report ? [{ ...entry, title: report.story_title, latestAt: report.latest_at.toISOString(), representativeUrl: report.url, representativeSource: report.source_name }] : [];
+    return report ? [{ ...entry, title: report.story_title, storyPublicId: report.story_public_id,
+      sourceNames: entry.sourceNames.filter(name => ownedNames.has(name)), participants: entry.participants.filter(person => ownedNames.has(person.name)), latestAt: report.latest_at.toISOString(), representativeUrl: report.url, representativeSource: report.source_name }] : [];
   });
   return { ...row, entries: visible };
 }
@@ -56,7 +60,7 @@ interface Extras {
   texts: Map<number, { summary: string | null; latest: string | null }>;
 }
 
-const readExtras = shared((ranking: HotRanking) => String(ranking.id), queryExtras);
+const readExtras = shared((ranking: HotRanking) => `${publicationCacheKey()}:${ranking.id}`, queryExtras);
 
 async function queryExtras(ranking: HotRanking): Promise<Extras> {
   const ids = ranking.entries.map((e) => e.storyId);
@@ -67,7 +71,7 @@ async function queryExtras(ranking: HotRanking): Promise<Extras> {
       SELECT DISTINCT ON (s.id) s.name, s.icon_url, a.x_post->>'avatarUrl' AS avatar
       FROM story_signals ss JOIN sources s ON s.id = ss.source_id
       LEFT JOIN articles a ON a.id = CASE WHEN s.icon_url IS NULL THEN ss.article_id END AND a.x_post ? 'avatarUrl'
-      WHERE ss.story_id = ANY(${ids}::bigint[])
+      WHERE ss.space_id = ${publicationSpaceId()} AND ss.story_id = ANY(${ids}::bigint[])
       ORDER BY s.id, (a.id IS NULL), a.discovered_at DESC, a.id DESC`,
     storyTexts(ids),
   ]);

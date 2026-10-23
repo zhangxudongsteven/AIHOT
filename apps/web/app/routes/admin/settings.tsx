@@ -93,7 +93,7 @@ function TargetToggle({ t }: { t: AdminSettings["targets"][number] }) {
         confirmLabel={t.enabled ? "停用" : "启用"}
         busy={pending === "target"}
         onClose={() => setOpen(false)}
-        onSubmit={async (reason) => (await run("POST", `/api/admin/notify-targets/${encodeURIComponent(t.key)}`, { enabled: !t.enabled, reason }, { label: "target", success: "已更新" })) !== null}
+        onSubmit={async (reason) => (await run("POST", `/api/admin/notify-targets/${encodeURIComponent(t.key)}`, { enabled: !t.enabled, reason, spaceId: t.space_id }, { label: "target", success: "已更新" })) !== null}
       />
     </>
   );
@@ -114,7 +114,7 @@ export default function SettingsAdmin({ loaderData: s }: Route.ComponentProps) {
             rows={s.targets}
             rowKey={(t) => t.key}
             columns={[
-              { key: "k", label: "目的地", render: (t) => <div><div className="font-medium text-ink">{t.note ?? t.key}</div><div className="font-mono text-[11.5px] text-ink-4">{t.key} · {t.config_ref}</div></div> },
+              { key: "k", label: "目的地", render: (t) => <div><div className="font-medium text-ink">{t.note ?? t.key}</div><div className="font-mono text-[11.5px] text-ink-4">{t.space_id} · {t.subject_kinds.join(" / ")} · {t.config_ref}</div></div> },
               { key: "e", label: "状态", render: (t) => (t.enabled ? <Badge tone="ok">启用于 {bj(t.enabled_at)}</Badge> : <Badge>停用</Badge>) },
               { key: "d", label: "7 天投递", align: "right", render: (t) => num(t.deliveries_7d) },
               { key: "a", label: "", align: "right", render: (t) => <TargetToggle t={t} /> },

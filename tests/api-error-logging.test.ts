@@ -2,6 +2,7 @@
 // request id and cannot be located; query strings or authentication headers enter the journal;
 // changing logging also changes the established Problem JSON or its headers; suppressing ordinary
 // request logs also suppresses a real stream error after response headers have already gone out.
+import "./setup.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
@@ -10,6 +11,7 @@ test("API startup is quiet and an unexpected error retains the request, stack an
   const script = `
     import assert from "node:assert/strict";
     import { buildApp } from ${JSON.stringify(new URL("../apps/api/src/app.ts", import.meta.url).href)};
+    import { closeDb } from "@aihot/backend/db";
     import { installModules } from "@aihot/backend/modules";
     import { mcpToolName } from "@aihot/contracts/mcp";
     import { z } from "zod";
@@ -61,10 +63,13 @@ test("API startup is quiet and an unexpected error retains the request, stack an
     assert.ok(!mcp.body.includes("mcp upstream failure"));
     await app.inject({ url: "/api/stream?token=private-stream" }).catch(() => {});
     await app.close();
+    await closeDb();
   `;
   const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
     cwd: new URL("..", import.meta.url), encoding: "utf8", timeout: 15000,
-    env: { ...process.env, DATABASE_URL: "postgres://127.0.0.1/aihot_logging_test", AIHOT_CREDENTIALS_DIR: "/nonexistent-test-credentials", LOG_LEVEL: "info" },
+    // Public routes now resolve the enabled default channel. Use this test's migrated disposable
+    // database, while the deliberate handler failures below keep the log-contract checks unchanged.
+    env: { ...process.env, AIHOT_CREDENTIALS_DIR: "/nonexistent-test-credentials", LOG_LEVEL: "info", MODEL_CALLS_ENABLED: "false", COLLECT_ENABLED: "false" },
   });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stderr, "");

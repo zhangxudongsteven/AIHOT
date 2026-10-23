@@ -44,6 +44,21 @@ export interface RedirectRule {
 const ENGINE_REDIRECTS: RedirectRule[] = [
   {
     match: "regex",
+    path: "^/channels/([^/]+)/(all|about|agent|changelog|feedback|starred|more|privacy|terms)/+$",
+    status: 301,
+    location: "/channels/$1/$2",
+    keepQuery: true,
+  },
+  {
+    match: "regex",
+    path: "^/channels/([^/]+)/(feed|rss|rss\\.xml|atom\\.xml)$",
+    status: 301,
+    location: "/channels/$1/feed.xml",
+    keepQuery: true,
+    headers: { "Cache-Control": "private, no-store" },
+  },
+  {
+    match: "regex",
     path: "^/(all|about|agent|changelog|feedback|starred|more|privacy|terms)/+$",
     status: 301,
     location: "/$1",
@@ -122,6 +137,7 @@ const literal = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
  */
 const ENGINE_API_PATHS: RegExp[] = [
   /^\/api\//,
+  /^\/channels\/[^/]+\/(feed(\.xml|\/.*)?|rss|rss\.xml|atom\.xml|og\/.*|sitemaps\/.*|sitemap\.xml|llms\.txt|openapi-v1\.json|items\/[^/]+\/markdown)$/,
   /^\/feed(\.xml|\/.*)?$/,
   /^\/(rss|rss\.xml|atom\.xml)$/,
   /^\/openapi-v1\.json$/,

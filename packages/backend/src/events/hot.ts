@@ -1,6 +1,8 @@
 // Hot ranking: attention over the last 48 hours from independent participants.
 // Each participant counts once per window (repeat collection does not add heat), decays with a
 // 24-hour half-life, and the source time (not collection time) places evidence in the window.
+import { eventContext, type EventOptions } from "./scope.ts";
+import type { SpaceContext } from "../spaces/context.ts";
 import { COMMUNITY_FEEDS } from "@aihot/site";
 import { sql, type Db } from "../db.ts";
 import { pickRepresentative, REPRESENTATIVE_COLUMNS, type RepresentativeIdentity } from "../publication/representative.ts";
@@ -47,9 +49,10 @@ export interface HotRanking {
 }
 
 /** Administrative invalidation needs the saved references, including ones already hidden publicly. */
-export async function storedHotRanking(db: Db = sql): Promise<HotRanking | null> {
+export async function storedHotRanking(db: Db = sql, options: EventOptions = {}): Promise<HotRanking | null> {
+  const context = await eventContext(options, db);
   const [row] = await db<{ id: number; computed_at: Date; rule_version: string; entries: HotEntry[]; evidence: Record<string, unknown> | null }[]>`
-    SELECT id, computed_at, rule_version, entries, evidence FROM hot_rankings WHERE published ORDER BY computed_at DESC LIMIT 1`;
+    SELECT id, computed_at, rule_version, entries, evidence FROM hot_rankings WHERE space_id = ${context.spaceId} AND published ORDER BY computed_at DESC LIMIT 1`;
   if (!row) return null;
   return { id: row.id, computedAt: row.computed_at.toISOString(), ruleVersion: row.rule_version, entries: row.entries, coverage: row.evidence };
 }
@@ -87,9 +90,10 @@ interface SourceClock {
 }
 
 /** Scheduled sources and their last successful fetch (screenshot-reported and pushed sources cannot visibly fall behind). */
-export async function sourceClocks(): Promise<SourceClock[]> {
+export async function sourceClocks(options: EventOptions = {}): Promise<SourceClock[]> {
+  const context = await eventContext(options);
   const rows = await sql<{ id: string; last_ok_at: Date | null; interval_minutes: number }[]>`
-    SELECT id, last_ok_at, interval_minutes FROM sources WHERE enabled AND kind IN ('rss', 'web_list', 'json_list', 'x_search')`;
+    SELECT id, last_ok_at, interval_minutes FROM sources WHERE space_id = ${context.spaceId} AND enabled AND kind IN ('rss', 'web_list', 'json_list', 'x_search')`;
   return rows.map((r) => ({ id: r.id, lastOk: r.last_ok_at?.getTime() ?? null, graceMs: Math.max(r.interval_minutes * 3, 90) * 60_000 }));
 }
 
@@ -110,7 +114,7 @@ export function behindSources(clocks: SourceClock[], at: number, grace: boolean)
  * group), a company's own channels (owner), else the source itself. Admin changes to roles, groups and
  * owners therefore reach the heat at once, without rewriting stored signals.
  */
-export const currentSignals = () => sql`(
+export const currentSignals = (spaceId = "default") => sql`(
   SELECT ss.story_id, ss.article_id, s.id AS source_id, ss.observed_at, s.created_at AS source_since,
     CASE WHEN s.participation_mode = 'editorial' THEN 'editorial' ELSE 'signal' END AS kind,
     CASE
@@ -122,7 +126,7 @@ export const currentSignals = () => sql`(
     END AS participant_key
   FROM story_signals ss JOIN articles a ON a.id = ss.article_id JOIN sources s ON s.id = a.source_id
   LEFT JOIN publications p ON p.article_id = ss.article_id
-  WHERE s.participation_mode <> 'isolated' AND coalesce(p.visibility, 'public') <> 'withdrawn'
+  WHERE a.space_id = ${spaceId} AND ss.space_id = ${spaceId} AND s.participation_mode <> 'isolated' AND coalesce(p.visibility, 'public') <> 'withdrawn'
     AND NOT EXISTS (SELECT 1 FROM grouping_overrides go WHERE go.article_id = ss.article_id AND go.mode = 'standalone')
     AND (s.participation_mode <> 'editorial' OR EXISTS (SELECT 1 FROM fact_articles fa JOIN facts f ON f.id = fa.fact_id
       WHERE fa.article_id = ss.article_id AND f.story_id = ss.story_id AND ${evidenceCondition()}))
@@ -135,7 +139,8 @@ export const currentSignals = () => sql`(
  * already collecting when the earlier window began (a source added since widens what is seen; it
  * adds to the heat, not to its growth).
  */
-export async function heatRows(at: Date, behind: string[] = [], storyIds?: number[]): Promise<HeatRow[]> {
+export async function heatRows(at: Date, behind: string[] = [], storyIds?: number[], options: EventOptions = {}): Promise<HeatRow[]> {
+  const context = await eventContext(options);
   const prev = new Date(at.getTime() - 6 * 3600 * 1000);
   const nowFrom = sql`${at}::timestamptz - make_interval(hours => ${WINDOW_HOURS})`;
   const prevFrom = sql`${prev}::timestamptz - make_interval(hours => ${WINDOW_HOURS})`;
@@ -151,7 +156,7 @@ export async function heatRows(at: Date, behind: string[] = [], storyIds?: numbe
              max(observed_at) FILTER (WHERE observed_at <= ${prev}) AS last_prev,
              bool_or(source_id = ANY(${behind}::text[])) AS behind,
              bool_or(source_since > ${prevFrom}) AS late
-      FROM ${currentSignals()} cs
+      FROM ${currentSignals(context.spaceId)} cs
       WHERE observed_at > ${prevFrom} AND observed_at <= ${at}
         ${storyIds ? sql`AND story_id = ANY(${storyIds}::bigint[])` : sql``}
       GROUP BY story_id, participant_key
@@ -180,9 +185,10 @@ export function heatIndex(heat: number): number {
   return Math.round(heat * 100) / 10; // one decimal on the 10× scale shown to readers
 }
 
-export async function computeHotRanking(at = new Date()): Promise<{ id: number; entries: number }> {
-  const behind = behindSources(await sourceClocks(), at.getTime(), true);
-  const rows = (await heatRows(at, behind)).filter((r) => Number(r.participants) >= MIN_PARTICIPANTS && Number(r.editorial_participants) >= 1);
+export async function computeHotRanking(at = new Date(), options: EventOptions = {}): Promise<{ id: number; entries: number }> {
+  const context = await eventContext(options);
+  const behind = behindSources(await sourceClocks({ context }), at.getTime(), true);
+  const rows = (await heatRows(at, behind, undefined, { context })).filter((r) => Number(r.participants) >= MIN_PARTICIPANTS && Number(r.editorial_participants) >= 1);
   rows.sort((a, b) => Number(b.heat) - Number(a.heat) || (b.latest_at?.getTime() ?? 0) - (a.latest_at?.getTime() ?? 0));
 
   const entries: HotEntry[] = [];
@@ -193,7 +199,7 @@ export async function computeHotRanking(at = new Date()): Promise<{ id: number; 
              f.id AS fact_id, ${REPRESENTATIVE_COLUMNS}, coalesce(p.published_at, p.discovered_at) AS at
       FROM facts f JOIN fact_articles fa ON fa.fact_id = f.id JOIN publications p ON p.article_id = fa.article_id
       JOIN sources s ON s.id = p.source_id
-      WHERE f.story_id = ${r.story_id} AND ${evidenceCondition()} AND ${listedCondition(at)}
+      WHERE f.story_id = ${r.story_id} AND ${evidenceCondition()} AND ${listedCondition(at, context.spaceId)}
       ORDER BY p.article_id, (fa.role = 'primary') DESC, f.id`;
     if (reports.length === 0) continue;
     // The event is shown under its own title, linked to the fact most sources report: the launch,
@@ -209,7 +215,7 @@ export async function computeHotRanking(at = new Date()): Promise<{ id: number; 
     const rep = pickRepresentative(selected.length ? selected : members);
     const participants = await sql<{ name: string; kind: "editorial" | "signal"; tier: string; at: Date }[]>`
       SELECT DISTINCT ON (cs.participant_key) s.name, cs.kind, s.tier, cs.observed_at AS at
-      FROM ${currentSignals()} cs JOIN sources s ON s.id = cs.source_id
+      FROM ${currentSignals(context.spaceId)} cs JOIN sources s ON s.id = cs.source_id
       WHERE cs.story_id = ${r.story_id} AND cs.observed_at > ${at}::timestamptz - make_interval(hours => ${WINDOW_HOURS}) AND cs.observed_at <= ${at}
       ORDER BY cs.participant_key, (cs.kind = 'editorial') DESC, cs.observed_at DESC`;
     // The reporting sources of the window, latest first (signal participants are counted separately).
@@ -254,12 +260,12 @@ export async function computeHotRanking(at = new Date()): Promise<{ id: number; 
     });
   }
   const [row] = await sql<{ id: number }[]>`
-    INSERT INTO hot_rankings (computed_at, rule_version, entries, evidence, published)
-    VALUES (${at}, ${HOT_RULE_VERSION}, ${sql.json(entries as never)},
+    INSERT INTO hot_rankings (space_id, computed_at, rule_version, entries, evidence, published)
+    VALUES (${context.spaceId}, ${at}, ${HOT_RULE_VERSION}, ${sql.json(entries as never)},
             ${sql.json({ windowHours: WINDOW_HOURS, halfLifeHours: HALF_LIFE_HOURS, minParticipants: MIN_PARTICIPANTS, candidates: rows.length } as never)}, true)
     RETURNING id`;
   // Keep a bounded history of rankings.
-  await sql`DELETE FROM hot_rankings WHERE computed_at < now() - interval '30 days'`;
+  await sql`DELETE FROM hot_rankings WHERE space_id = ${context.spaceId} AND computed_at < now() - interval '30 days'`;
   return { id: row!.id, entries: entries.length };
 }
 
@@ -267,10 +273,10 @@ export async function computeHotRanking(at = new Date()): Promise<{ id: number; 
  * One bounded batch per hour, shared by live snapshots and historical repair. All derived fields
  * are replaced together, including the cohort when a source's participation changes.
  */
-async function saveHeat(rows: HeatRow[], hour: Date): Promise<number> {
+async function saveHeat(rows: HeatRow[], hour: Date, context: SpaceContext): Promise<number> {
   for (let i = 0; i < rows.length; i += 1000) {
     const values = rows.slice(i, i + 1000).map((r) => ({
-      story_id: r.story_id, hour, heat: heatIndex(Number(r.heat)), participants: Number(r.participants),
+      space_id: context.spaceId, story_id: r.story_id, hour, heat: heatIndex(Number(r.heat)), participants: Number(r.participants),
       cohort: Number(r.editorial_participants), complete: Number(r.behind_participants) === 0,
     }));
     await sql`INSERT INTO story_heat_hourly ${sql(values)}
@@ -285,18 +291,19 @@ async function saveHeat(rows: HeatRow[], hour: Date): Promise<number> {
  * source was behind is marked incomplete (the charts leave it out) and recomputed once the sources
  * have fetched past it: values are deterministic from the signals, which carry the source's time.
  */
-export async function snapshotHeat(at = new Date()): Promise<{ stories: number; repaired: number }> {
+export async function snapshotHeat(at = new Date(), options: EventOptions = {}): Promise<{ stories: number; repaired: number }> {
+  const context = await eventContext(options);
   const hour = new Date(Math.floor(at.getTime() / 3600000) * 3600000);
-  const clocks = await sourceClocks();
-  const rows = await heatRows(hour, behindSources(clocks, hour.getTime(), true));
-  await saveHeat(rows, hour);
+  const clocks = await sourceClocks({ context });
+  const rows = await heatRows(hour, behindSources(clocks, hour.getTime(), true), undefined, { context });
+  await saveHeat(rows, hour, context);
   let repaired = 0;
   const stale = await sql<{ hour: Date; stories: number[] }[]>`
     SELECT hour, array_agg(story_id) AS stories FROM story_heat_hourly
-    WHERE NOT complete AND hour < ${hour} AND hour > ${new Date(hour.getTime() - WINDOW_HOURS * 3600000)} GROUP BY hour ORDER BY hour`;
+    WHERE space_id = ${context.spaceId} AND NOT complete AND hour < ${hour} AND hour > ${new Date(hour.getTime() - WINDOW_HOURS * 3600000)} GROUP BY hour ORDER BY hour`;
   for (const s of stale) {
-    const rows = await heatRows(s.hour, behindSources(clocks, s.hour.getTime(), false), s.stories.map(Number));
-    repaired += await saveHeat(rows.filter((r) => Number(r.behind_participants) === 0), s.hour);
+    const rows = await heatRows(s.hour, behindSources(clocks, s.hour.getTime(), false), s.stories.map(Number), { context });
+    repaired += await saveHeat(rows.filter((r) => Number(r.behind_participants) === 0), s.hour, context);
   }
   return { stories: rows.length, repaired };
 }
@@ -307,14 +314,15 @@ export async function snapshotHeat(at = new Date()): Promise<{ stories: number; 
  * sources were all collecting before the first plotted hour's window began, so the line compares like
  * with like across the whole plot. No such participant: no line.
  */
-export async function heatSeries(storyId: number, now = new Date(), days = 7): Promise<Array<{ hour: Date; heat: number; participants: number }>> {
+export async function heatSeries(storyId: number, now = new Date(), days = 7, options: EventOptions = {}): Promise<Array<{ hour: Date; heat: number; participants: number }>> {
+  const context = await eventContext(options);
   const hours = (await sql<{ hour: Date }[]>`
-    SELECT hour FROM story_heat_hourly WHERE story_id = ${storyId} AND complete AND hour > ${new Date(now.getTime() - days * 86400_000)} AND hour <= ${now}
+    SELECT hour FROM story_heat_hourly WHERE story_id = ${storyId} AND space_id = ${context.spaceId} AND complete AND hour > ${new Date(now.getTime() - days * 86400_000)} AND hour <= ${now}
     ORDER BY hour`).map((h) => h.hour.getTime());
   if (!hours.length) return [];
   const since = hours[0]! - WINDOW_HOURS * 3600_000;
   const rows = await sql<{ participant_key: string; observed_at: Date; source_since: Date }[]>`
-    SELECT participant_key, observed_at, source_since FROM ${currentSignals()} cs
+    SELECT participant_key, observed_at, source_since FROM ${currentSignals(context.spaceId)} cs
     WHERE story_id = ${storyId} AND observed_at > ${new Date(since)} AND observed_at <= ${now}`;
   const late = new Set(rows.filter((r) => r.source_since.getTime() > since).map((r) => r.participant_key));
   const times = new Map<string, number[]>();

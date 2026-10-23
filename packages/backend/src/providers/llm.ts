@@ -11,6 +11,7 @@ import {
   assertAccepted, failureKind, logicalKeyFor, ModelOutputError, ModelUnavailableError, paidRequest, ProviderRejectedError, receiptState, rejectReceivedResponse,
   type ReceiptRequest,
 } from "./receipts.ts";
+import { configForContext, resolveSpaceContext, type SpaceContext } from "../spaces/context.ts";
 import { enterModelCircuit, recordModelHealth, type CircuitPermit } from "./circuit.ts";
 
 export interface ModelSpec extends ModelPreset {
@@ -49,6 +50,7 @@ export const MODELS: Record<string, ModelSpec> = {
 export type ContentPart = { type: "text"; text: string } | { type: "image_url"; image_url: { url: string } };
 
 export interface ChatJsonOptions<S extends z.ZodType> {
+  context?: SpaceContext;
   model: string;
   /** One independently operated, evaluated backup. Only availability failures switch providers. */
   fallbackModel?: string;
@@ -115,12 +117,18 @@ function isConnectFailure(error: unknown): boolean {
   return ["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "UND_ERR_CONNECT_TIMEOUT", "CERT_HAS_EXPIRED"].includes(code ?? "");
 }
 
+function specFor(model: string, context?: SpaceContext): ModelSpec {
+  const spec = context ? configForContext(context).modelSpecs[model] : MODELS[model];
+  if (!spec) throw new Error(`Unknown model ${model}`);
+  return { ...spec, key: model };
+}
+
 function requestFor<S extends z.ZodType>(opts: ChatJsonOptions<S>, spec: ModelSpec) {
   const temperature = opts.temperature ?? 0.2;
   const maxTokens = Math.max(opts.maxTokens ?? 1500, 512) + (spec.reasoningTokens ?? 0);
   const userText = typeof opts.user === "string" ? opts.user : JSON.stringify(opts.user);
   const request: ReceiptRequest = {
-    service: spec.service, model: spec.model, purpose: opts.purpose, subject: opts.subject,
+    service: spec.service, model: spec.model, purpose: opts.purpose, subject: opts.subject, context: opts.context,
     identity: { model: spec.model, promptVersion: opts.promptVersion, system: sha256(opts.system), user: sha256(userText), temperature, maxTokens, extra: spec.extra ?? null },
     requestSummary: { promptVersion: opts.promptVersion, systemHash: sha256(opts.system), userHash: sha256(userText), userChars: userText.length, temperature, maxTokens },
     attemptTag: opts.attemptTag,
@@ -145,10 +153,11 @@ const FAILOVER_TIMEOUT_MS = 30_000;
  * followed by a second paid request.
  */
 export async function chatJson<S extends z.ZodType>(opts: ChatJsonOptions<S>): Promise<ChatJsonResult<z.infer<S>>> {
+  if (opts.context) opts = { ...opts, context: await resolveSpaceContext(opts.context.spaceId, opts.context.configVersion) };
   if (!opts.fallbackModel) return chatOnce(opts);
   const backupOpts = { ...opts, model: opts.fallbackModel };
-  const fallbackFor = logicalKeyFor(requestFor(opts, MODELS[opts.model]!).request);
-  const saved = await receiptState(requestFor(backupOpts, MODELS[opts.fallbackModel]!).request);
+  const fallbackFor = logicalKeyFor(requestFor(opts, specFor(opts.model, opts.context)).request);
+  const saved = await receiptState(requestFor(backupOpts, specFor(opts.fallbackModel, opts.context)).request);
   // Finish an existing backup attempt before choosing a provider again, even after recovery/restart.
   if (saved && saved !== "failed") return chatOnce(backupOpts, true, fallbackFor);
   try {
@@ -161,7 +170,7 @@ export async function chatJson<S extends z.ZodType>(opts: ChatJsonOptions<S>): P
 }
 
 async function chatOnce<S extends z.ZodType>(opts: ChatJsonOptions<S>, circuit = false, fallbackFor?: string): Promise<ChatJsonResult<z.infer<S>>> {
-  const spec = MODELS[opts.model];
+  const spec = specFor(opts.model, opts.context);
   if (!spec) throw new Error(`Unknown model ${opts.model}`);
   if (!config.modelCallsEnabled) throw new ModelUnavailableError("Model calls are disabled (MODEL_CALLS_ENABLED=false)");
   const baseUrl = credential("models", spec.baseUrlEnv);

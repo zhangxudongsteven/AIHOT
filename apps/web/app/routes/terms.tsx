@@ -1,3 +1,4 @@
+import { withSpaceMeta } from "../lib/seo";
 import { POLICY, SITE } from "@aihot/site";
 import copy from "@aihot/site/pages/terms.md?raw";
 import { edgeTtl } from "../lib/api.server";
@@ -15,7 +16,7 @@ export function headers() {
   return edgeTtl(300);
 }
 
-export function meta() {
+function routeMeta() {
   return pageMeta({ title: POLICY.terms.name, description: POLICY.terms.description, path: "/terms", image: "/og/pages/terms.png" });
 }
 
@@ -38,3 +39,5 @@ export default function TermsPage() {
     />
   );
 }
+
+export const meta = withSpaceMeta(routeMeta);

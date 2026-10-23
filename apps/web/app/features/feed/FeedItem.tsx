@@ -1,11 +1,11 @@
+import { useSpace } from "../../lib/space";
 // One report in a feed. Desktop (≥ 961px): a white card beside the time rail. Phones: a compact row with
 // the time in the source line, the bookmark at hand, the reason in one line and duplicate reports
 // behind one button that opens a sheet. One markup, two presentations.
 import { memo } from "react";
-import { Link } from "react-router";
+import { Link } from "../../lib/space-router";
 import { IntentLink } from "../../components/ui/IntentLink";
 import type { GroupInfo, FeedItemSummary, TimelineFilters } from "@aihot/contracts/site";
-import { CATEGORY_LABELS } from "@aihot/contracts/taxonomy";
 import { ITEM_COPY } from "@aihot/site";
 import { SameEventBadge, SelectedBadge } from "../../components/ui/Badge";
 import { ScoreLabel } from "../../components/ui/Score";
@@ -28,9 +28,10 @@ export interface FeedItemProps {
 }
 
 export const FeedItem = memo(function FeedItem({ item, group, filters, read = false, onOpen, showTags = false, at }: FeedItemProps) {
+  const { categories, slug } = useSpace();
   const isX = item.channel === "x" && !!item.x;
   const open = () => {
-    rememberPreview(item);
+    rememberPreview(item, slug);
     onOpen?.(item.id);
   };
   const showSources = !!group && (group.additionalSourceCount > 0 || group.reportCount > 1);
@@ -87,7 +88,7 @@ export const FeedItem = memo(function FeedItem({ item, group, filters, read = fa
         <div className="relative z-10 mt-2 hidden flex-wrap gap-x-2.5 gap-y-1 text-[12px] text-ink-4 lg:flex">
           {showTags && item.category && (
             <Link to={`/all?category=${item.category}`} className="hover:text-accent">
-              {CATEGORY_LABELS[item.category]}
+              {categories.find(c => c.key === item.category)?.label ?? item.category}
             </Link>
           )}
           {tags.map((t) => (

@@ -1,5 +1,8 @@
+import { useSpaceFetch } from "../lib/space";
+import { useSpace } from "../lib/space";
+import { withSpaceMeta } from "../lib/seo";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Link, useLocation } from "react-router";
+import { Link, useLocation } from "../lib/space-router";
 import type { ItemAvailability } from "@aihot/contracts/site";
 import { SITE } from "@aihot/site";
 import { Presence } from "../components/ui/Presence";
@@ -19,7 +22,7 @@ export function headers() {
   return edgeTtl(300);
 }
 
-export function meta() {
+function routeMeta() {
   return pageMeta({ title: "我的收藏", description: `保存在这台设备上的 ${SITE.name} 收藏。`, path: "/starred", noindex: true });
 }
 
@@ -33,6 +36,8 @@ function reportText(r: ImportReport): string {
 }
 
 export default function StarredPage() {
+  const spaceFetch = useSpaceFetch();
+  const { slug } = useSpace();
   const starred = useStarred();
   const [mounted, setMounted] = useState(false);
   const [availability, setAvailability] = useState<Record<string, ItemAvailability>>({});
@@ -50,7 +55,7 @@ export default function StarredPage() {
     for (let i = 0; i < ids.length; i += 100) batches.push(ids.slice(i, i + 100));
     Promise.all(
       batches.map((batch) =>
-        fetch(`/api/site/items/availability?ids=${encodeURIComponent(batch.join(","))}`, { signal: controller.signal })
+        spaceFetch(`/api/site/items/availability?ids=${encodeURIComponent(batch.join(","))}`, { signal: controller.signal })
           .then((r) => (r.ok ? (r.json() as Promise<Record<string, ItemAvailability>>) : {}))
           .catch(() => ({})),
       ),
@@ -71,7 +76,7 @@ export default function StarredPage() {
   useSaveOnLeave(historyKey, () => null);
 
   const doExport = () => {
-    const blob = new Blob([JSON.stringify(exportBundle(), null, 2)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify(exportBundle(slug), null, 2)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = `${SITE.mcpPrefix}-local-data-${new Date().toISOString().slice(0, 10)}.json`;
@@ -82,7 +87,7 @@ export default function StarredPage() {
   const doImport = async (file: File | undefined) => {
     if (!file) return;
     try {
-      const report = importBundle(await file.text());
+      const report = importBundle(await file.text(), slug);
       setNotice({ kind: report.readFailed ? "error" : "ok", text: `导入完成：${reportText(report)}` });
     } catch (e) {
       setNotice({ kind: "error", text: e instanceof Error ? e.message : "导入失败" });
@@ -156,7 +161,7 @@ export default function StarredPage() {
                   <span className="ml-auto hidden shrink-0 sm:inline">
                     收藏于 <span className="num">{fullDateTime(s.savedAt)}</span>
                   </span>
-                  <button type="button" aria-label="取消收藏" title="取消收藏" onClick={() => removeStar(s.id)} className="relative z-10 -my-1 ml-auto grid size-7 shrink-0 place-items-center rounded-full text-ink-4 transition-colors hover:bg-bg-sunk hover:text-ink sm:ml-0">
+                  <button type="button" aria-label="取消收藏" title="取消收藏" onClick={() => removeStar(s.id, slug)} className="relative z-10 -my-1 ml-auto grid size-7 shrink-0 place-items-center rounded-full text-ink-4 transition-colors hover:bg-bg-sunk hover:text-ink sm:ml-0">
                     <IconClose size={14} />
                   </button>
                 </div>
@@ -180,3 +185,5 @@ export default function StarredPage() {
     </div>
   );
 }
+
+export const meta = withSpaceMeta(routeMeta);

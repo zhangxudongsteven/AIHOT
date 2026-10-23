@@ -2,6 +2,9 @@
 // one story that grew two roots: their roots are compared directly and merge only when both models
 // see one story. Stories that stay apart though reports keep tying them list each other as related
 // events (linkRelatedStories, hourly).
+import { eventContext, type EventOptions } from "./scope.ts";
+import type { SpaceContext } from "../spaces/context.ts";
+import { promptText, promptVersionFor } from "../editorial/prompts.ts";
 import { modelRoute } from "../editorial/models.ts";
 import { beijingDate } from "@aihot/contracts/time";
 import { sql } from "../db.ts";
@@ -12,7 +15,7 @@ import { mergeStoryInto } from "./merge.ts";
 import { RECALL_DAYS, rootFactOf } from "./recall.ts";
 import { firmTie, latestJudgements, RELATED_MIN_REPORTS } from "./related.ts";
 import {
-  PAIR_SYSTEM, PairSchema, RELATE_PROMPT_VERSION, STORY_REVIEW_MIN_CONFIDENCE, firmlyTied, pairUser,
+  PairSchema, STORY_REVIEW_MIN_CONFIDENCE, firmlyTied, pairUser,
   type Relation, type ReportView,
 } from "./relate.ts";
 
@@ -25,7 +28,7 @@ interface StoryRoot {
 }
 
 /** A model-managed story's root; editor-confirmed identities are excluded before paid comparison. */
-async function storyRoot(storyId: number): Promise<StoryRoot | null> {
+async function storyRoot(storyId: number, context: SpaceContext): Promise<StoryRoot | null> {
   const [row] = await sql<{
     subject: string | null; action: string | null; object: string | null; occurred_at: Date | null;
     title: string; summary: string | null; source: string; first_party: boolean; at: Date | null; publicationTime: string | null; started_at: Date; roundup: boolean;
@@ -33,15 +36,15 @@ async function storyRoot(storyId: number): Promise<StoryRoot | null> {
     SELECT f.subject, f.action, f.object, f.occurred_at, p.title, p.summary, s.name AS source, (s.tier = 'T1') AS first_party,
            p.published_at AS at, a.publication_time AS "publicationTime",
            (SELECT min(coalesce(q.published_at, q.discovered_at)) FROM fact_articles z JOIN publications q ON q.article_id = z.article_id
-            WHERE z.fact_id = f.id AND z.role IN ('primary', 'report') AND ${groupingEvidenceCondition(sql`z.article_id`)}) AS started_at,
+            WHERE z.fact_id = f.id AND z.role IN ('primary', 'report') AND ${groupingEvidenceCondition(sql`z.article_id`, context.spaceId)}) AS started_at,
            EXISTS (SELECT 1 FROM grouping_decisions d WHERE d.article_id = fa.article_id AND d.verdict = 'roundup') AS roundup
     FROM facts f
     JOIN stories st ON st.id = f.story_id AND st.origin <> 'manual'
-    JOIN fact_articles fa ON fa.fact_id = f.id AND fa.role IN ('primary', 'report') AND ${groupingEvidenceCondition(sql`fa.article_id`)}
+    JOIN fact_articles fa ON fa.fact_id = f.id AND fa.role IN ('primary', 'report') AND ${groupingEvidenceCondition(sql`fa.article_id`, context.spaceId)}
     JOIN publications p ON p.article_id = fa.article_id
     JOIN articles a ON a.id = p.article_id
     JOIN sources s ON s.id = p.source_id
-    WHERE f.id = ${rootFactOf(storyId)}
+    WHERE f.id = ${rootFactOf(storyId, context.spaceId)}
     ORDER BY (fa.role = 'primary') DESC, p.timeline_at ASC
     LIMIT 1`;
   if (!row) return null;
@@ -54,18 +57,19 @@ async function storyRoot(storyId: number): Promise<StoryRoot | null> {
   };
 }
 
-async function judgeStories(capability: "group" | "groupReview", a: StoryRoot, b: StoryRoot): Promise<{ relation: Relation; confidence: number; difference: string; receiptId: number }> {
+async function judgeStories(capability: "group" | "groupReview", a: StoryRoot, b: StoryRoot, context: SpaceContext): Promise<{ relation: Relation; confidence: number; difference: string; receiptId: number }> {
   const res = await chatJson({
-    ...await modelRoute(capability), purpose: capability === "group" ? "group_story" : "group_story_review", subject: `story:${a.storyId}:${b.storyId}`,
-    promptVersion: RELATE_PROMPT_VERSION, system: PAIR_SYSTEM, user: pairUser(a.report, b.report), schema: PairSchema, temperature: 0, maxTokens: 400,
+    context, ...await modelRoute(capability, context), purpose: capability === "group" ? "group_story" : "group_story_review", subject: `story:${a.storyId}:${b.storyId}`,
+    promptVersion: promptVersionFor(context, "group-pair", "group-signal"), system: promptText("group-pair", {}, context), user: pairUser(a.report, b.report), schema: PairSchema, temperature: 0, maxTokens: 400,
   });
   return { relation: res.data.relation, confidence: res.data.confidence, difference: res.data.difference, receiptId: res.receiptId };
 }
 
-export async function liveStory(id: number): Promise<number | null> {
+export async function liveStory(id: number, options: EventOptions = {}): Promise<number | null> {
+  const context = await eventContext(options);
   let current = id;
   for (let hops = 0; hops < 20; hops++) {
-    const [st] = await sql<{ merged_into: number | null }[]>`SELECT merged_into FROM stories WHERE id = ${current}`;
+    const [st] = await sql<{ merged_into: number | null }[]>`SELECT merged_into FROM stories WHERE id = ${current} AND space_id = ${context.spaceId}`;
     if (!st) return null;
     if (st.merged_into === null) return current;
     current = Number(st.merged_into);
@@ -91,31 +95,32 @@ export interface Consolidation {
  * the judge and then the review model both see one occurrence or a direct development: a report tied
  * to two different events (a comparison, a roundup) cannot fuse them on its own.
  */
-export async function consolidate(storyIds: number[]): Promise<Consolidation[]> {
+export async function consolidate(storyIds: number[], options: EventOptions = {}): Promise<Consolidation[]> {
+  const context = await eventContext(options);
   const live = new Set<number>();
   for (const id of storyIds) {
-    const s = await liveStory(id);
+    const s = await liveStory(id, { context });
     if (s !== null) live.add(s);
   }
   if (live.size < 2) return [];
-  const roots = (await Promise.all([...live].map(storyRoot))).filter((r): r is StoryRoot => !!r && !r.roundup);
+  const roots = (await Promise.all([...live].map(id => storyRoot(id, context)))).filter((r): r is StoryRoot => !!r && !r.roundup);
   if (roots.length < 2) return [];
   roots.sort((x, y) => x.at.getTime() - y.at.getTime() || x.storyId - y.storyId);
   const [anchor, ...others] = roots as [StoryRoot, ...StoryRoot[]];
   const out: Consolidation[] = [];
   for (const other of others) {
     const base = { from: other.storyId, into: anchor.storyId, fromTitle: other.report.title, intoTitle: anchor.report.title };
-    const first = await judgeStories("group", anchor, other);
+    const first = await judgeStories("group", anchor, other, context);
     await completeReceipt(sql, first.receiptId);
     if (!firmlyTied(first.relation, first.confidence)) {
       out.push({ ...base, merge: false, first: first.relation, second: null, difference: first.difference });
       continue;
     }
     // The review model reads the pair the other way round.
-    const second = await judgeStories("groupReview", other, anchor);
+    const second = await judgeStories("groupReview", other, anchor, context);
     await completeReceipt(sql, second.receiptId);
     const merge = firmlyTied(second.relation, second.confidence, STORY_REVIEW_MIN_CONFIDENCE)
-      && !!await mergeStoryInto(other.storyId, anchor.storyId, `同一事件（${first.relation}，复核 ${second.relation}）：${other.report.title}｜${anchor.report.title}`, "grouping");
+      && !!await mergeStoryInto(other.storyId, anchor.storyId, `同一事件（${first.relation}，复核 ${second.relation}）：${other.report.title}｜${anchor.report.title}`, "grouping", { context });
     out.push({ ...base, merge, first: first.relation, second: second.relation, difference: first.difference || second.difference });
   }
   return out;
@@ -126,9 +131,9 @@ export async function consolidate(storyIds: number[]): Promise<Consolidation[]> 
  * marks older stories; one that mentions the root does not count): the story is neither merged nor
  * linked.
  */
-const startedByRoundup = (story: ReturnType<typeof sql>) => sql`EXISTS (
+const startedByRoundup = (story: ReturnType<typeof sql>, spaceId: string) => sql`EXISTS (
   SELECT 1 FROM fact_articles r JOIN grouping_decisions d ON d.article_id = r.article_id AND d.verdict = 'roundup'
-  WHERE r.fact_id = ${rootFactOf(story)} AND r.role <> 'mention' AND ${groupingEvidenceCondition(sql`r.article_id`)})`;
+  WHERE r.fact_id = ${rootFactOf(story, spaceId)} AND r.role <> 'mention' AND ${groupingEvidenceCondition(sql`r.article_id`, spaceId)})`;
 
 /**
  * Stories that stay apart although reports tie them (a reaction, a development of a later fact, a
@@ -138,16 +143,17 @@ const startedByRoundup = (story: ReturnType<typeof sql>) => sql`EXISTS (
  * added; public reads check saved bridge evidence after explicit changes, independently of the
  * recall window. A merged story drops out where links are read.
  */
-export async function linkRelatedStories(): Promise<{ added: number }> {
+export async function linkRelatedStories(options: EventOptions = {}): Promise<{ added: number }> {
+  const context = await eventContext(options);
   const [row] = await sql<{ added: number }[]>`
-    WITH latest AS (${latestJudgements(sql`d.created_at > now() - make_interval(days => ${RECALL_DAYS})`)}),
+    WITH latest AS (${latestJudgements(sql`d.space_id = ${context.spaceId} AND d.created_at > now() - make_interval(days => ${RECALL_DAYS})`)}),
     ties AS (
       SELECT DISTINCT l.article_id, own.story_id AS a, other.story_id AS b
       FROM latest l
-      JOIN fact_articles fa ON fa.article_id = l.article_id AND fa.role IN ('primary', 'report') AND ${groupingEvidenceCondition(sql`fa.article_id`)}
+      JOIN fact_articles fa ON fa.article_id = l.article_id AND fa.role IN ('primary', 'report') AND ${groupingEvidenceCondition(sql`fa.article_id`, context.spaceId)}
       JOIN facts own ON own.id = fa.fact_id
       CROSS JOIN LATERAL jsonb_array_elements(l.candidates) c
-      JOIN facts other ON other.id = (c->>'id')::bigint
+      JOIN facts other ON other.id = (c->>'id')::bigint AND other.space_id = own.space_id
       WHERE ${firmTie(sql`l`, sql`c`)} AND other.story_id <> own.story_id),
     pairs AS (
       SELECT least(a, b) AS x, greatest(a, b) AS y FROM ties GROUP BY 1, 2 HAVING count(DISTINCT article_id) >= ${RELATED_MIN_REPORTS}),
@@ -155,10 +161,10 @@ export async function linkRelatedStories(): Promise<{ added: number }> {
       SELECT p.x, p.y FROM pairs p
       JOIN stories sx ON sx.id = p.x AND sx.merged_into IS NULL
       JOIN stories sy ON sy.id = p.y AND sy.merged_into IS NULL
-      WHERE NOT ${startedByRoundup(sql`p.x`)} AND NOT ${startedByRoundup(sql`p.y`)}),
+      WHERE NOT ${startedByRoundup(sql`p.x`, context.spaceId)} AND NOT ${startedByRoundup(sql`p.y`, context.spaceId)}),
     added AS (
-      INSERT INTO story_links (story_id, other_id, relation)
-      SELECT x, y, 'related' FROM linked UNION ALL SELECT y, x, 'related' FROM linked
+      INSERT INTO story_links (space_id, story_id, other_id, relation)
+      SELECT ${context.spaceId}, x, y, 'related' FROM linked UNION ALL SELECT ${context.spaceId}, y, x, 'related' FROM linked
       ON CONFLICT (story_id, other_id) DO NOTHING RETURNING 1)
     SELECT count(*)::int AS added FROM added`;
   return { added: row?.added ?? 0 };

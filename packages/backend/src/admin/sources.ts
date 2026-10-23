@@ -20,6 +20,7 @@ import { FetchError, type Candidate, type SourceRow } from "../sources/types.ts"
 import { fetchWebList } from "../sources/web-list.ts";
 import { fetchXSearch } from "../sources/x.ts";
 import { xHandle } from "../sources/account.ts";
+import { DEFAULT_SPACE_ID, resolveSpaceContext, type SpaceContext } from "../spaces/context.ts";
 
 
 export interface SourceListFilters {
@@ -31,7 +32,8 @@ export interface SourceListFilters {
   page?: number;
 }
 
-export async function listSources(f: SourceListFilters): Promise<BeforeJson<AdminSources>> {
+export async function listSources(f: SourceListFilters, context?: SpaceContext): Promise<BeforeJson<AdminSources>> {
+  const scope = await resolveSpaceContext(context?.spaceId ?? DEFAULT_SPACE_ID, context?.configVersion);
   const page = Math.max(1, f.page ?? 1);
   const q = f.q?.trim() ? `%${f.q.trim()}%` : null;
   const [rows, [totals]] = await Promise.all([
@@ -42,7 +44,7 @@ export async function listSources(f: SourceListFilters): Promise<BeforeJson<Admi
            (SELECT count(*)::int FROM publications p WHERE p.source_id = s.id AND p.selected AND p.discovered_at > now() - interval '30 days') AS selected_30d
     FROM (
       SELECT * FROM sources
-      WHERE (${q}::text IS NULL OR name ILIKE ${q} OR id ILIKE ${q} OR config::text ILIKE ${q})
+      WHERE space_id = ${scope.spaceId} AND (${q}::text IS NULL OR name ILIKE ${q} OR id ILIKE ${q} OR config::text ILIKE ${q})
         AND (${f.kind ?? null}::text IS NULL OR kind = ${f.kind ?? null})
         AND (${f.health ?? null}::text IS NULL OR health = ${f.health ?? null})
         AND (${f.mode ?? null}::text IS NULL OR participation_mode = ${f.mode ?? null})
@@ -54,13 +56,14 @@ export async function listSources(f: SourceListFilters): Promise<BeforeJson<Admi
     sql<{ total: number; enabled: number; failing: number; degraded: number }[]>`
     SELECT count(*)::int AS total, count(*) FILTER (WHERE enabled)::int AS enabled,
            count(*) FILTER (WHERE health = 'failing')::int AS failing, count(*) FILTER (WHERE health = 'degraded')::int AS degraded
-    FROM sources`,
+    FROM sources WHERE space_id = ${scope.spaceId}`,
   ]);
   return { page, rows, totals };
 }
 
-export async function sourceDetail(id: string): Promise<BeforeJson<AdminSourceDetail> | null> {
-  const [source] = await sql<BeforeJson<AdminSource>[]>`SELECT *, (tier = 'T1') AS first_party FROM sources WHERE id = ${id}`;
+export async function sourceDetail(id: string, context?: SpaceContext): Promise<BeforeJson<AdminSourceDetail> | null> {
+  const scope = await resolveSpaceContext(context?.spaceId ?? DEFAULT_SPACE_ID, context?.configVersion);
+  const [source] = await sql<BeforeJson<AdminSource>[]>`SELECT *, (tier = 'T1') AS first_party FROM sources WHERE id = ${id} AND space_id = ${scope.spaceId}`;
   if (!source) return null;
   const [runs, items, [stats], history, [republish]] = await Promise.all([
     sql<BeforeJson<AdminSourceDetail["runs"][number]>[]>`SELECT id, started_at, finished_at, status, found_count, new_count, error, detail FROM fetch_runs WHERE source_id = ${id} ORDER BY started_at DESC LIMIT 30`,
@@ -78,13 +81,15 @@ export async function sourceDetail(id: string): Promise<BeforeJson<AdminSourceDe
 }
 
 /** A stored source fetched now without storing anything; null when there is no such source. */
-export async function previewStoredSource(id: string): Promise<BeforeJson<AdminSourcePreview> | null> {
-  const [source] = await sql<SourceRow[]>`SELECT * FROM sources WHERE id = ${id}`;
-  return source ? previewSource(source) : null;
+export async function previewStoredSource(id: string, context?: SpaceContext): Promise<BeforeJson<AdminSourcePreview> | null> {
+  const scope = await resolveSpaceContext(context?.spaceId ?? DEFAULT_SPACE_ID, context?.configVersion);
+  const [source] = await sql<SourceRow[]>`SELECT * FROM sources WHERE id = ${id} AND space_id = ${scope.spaceId}`;
+  return source ? previewSource(source, scope) : null;
 }
 
-export async function previewSource(draft: Pick<SourceRow, "id" | "kind" | "config"> & Partial<SourceRow>): Promise<BeforeJson<AdminSourcePreview>> {
-  const source = { name: draft.id, enabled: true, cursor: null, tier: "T2", participation_mode: "editorial", ...draft } as SourceRow;
+export async function previewSource(draft: Pick<SourceRow, "id" | "kind" | "config"> & Partial<SourceRow>, context?: SpaceContext): Promise<BeforeJson<AdminSourcePreview>> {
+  const scope = await resolveSpaceContext(context?.spaceId ?? DEFAULT_SPACE_ID, context?.configVersion);
+  const source = { name: draft.id, enabled: true, cursor: null, tier: "T2", participation_mode: "editorial", ...draft, space_id: scope.spaceId, context: scope } as SourceRow;
   assertSupportedConfig(source.kind, source.config);
   const started = performance.now();
   let found;
@@ -96,7 +101,7 @@ export async function previewSource(draft: Pick<SourceRow, "id" | "kind" | "conf
   // The listing and its detail pages as collection reads them, within the fixed publication boundary;
   // the limits of a first import and of later runs depend on the source's runs and are not previewed.
   let candidates = await listingEntries(source, found);
-  const known = await storedDetails(candidates.map((c) => c.identityKey!));
+  const known = await storedDetails(candidates.map((c) => c.identityKey!), scope.spaceId);
   const admits = (c: Candidate) => filterPublicationWindow([c], source.config.publishedAfter).length > 0;
   const reads = await enrichDetails(candidates, source, known, { budget: Number(source.config.detail?.maxFetches ?? 0), datedOut: {}, admits });
   // A page that fails keeps its listing data, as in collection; when none can be read, the rules are what fails.
@@ -133,12 +138,13 @@ const EDITABLE = z
 /** What the installed modules do for a source kind they collect themselves (their server.ts sourceKinds). */
 const kindHooks = (kind: string) => serverModules().flatMap((m) => m.sourceKinds?.[kind] ?? []);
 
-export async function updateSource(id: string, input: { patch: unknown; version: string; reason?: string }, actor: string) {
+export async function updateSource(id: string, input: { patch: unknown; version: string; reason?: string }, actor: string, context?: SpaceContext) {
+  const scope = await resolveSpaceContext(context?.spaceId ?? DEFAULT_SPACE_ID, context?.configVersion);
   const patch = EDITABLE.parse(input.patch);
   return sql.begin(async (tx) => {
     // Creation and address edits share the lock: checking then inserting must not race.
-    if (patch.config) await tx`SELECT pg_advisory_xact_lock(hashtext('admin-source-identity'))`;
-    const [before] = await tx`SELECT * FROM sources WHERE id = ${id} FOR UPDATE`;
+    if (patch.config) await tx`SELECT pg_advisory_xact_lock(hashtext(${`admin-source-identity:${scope.spaceId}`}))`;
+    const [before] = await tx`SELECT * FROM sources WHERE id = ${id} AND space_id = ${scope.spaceId} FOR UPDATE`;
     if (!before) return null;
     if (new Date(before.updated_at as Date).toISOString() !== input.version) throw new Conflict("信源已被其他操作修改，请刷新后再改");
     const kindChanged = patch.kind !== undefined && patch.kind !== before.kind;
@@ -160,7 +166,7 @@ export async function updateSource(id: string, input: { patch: unknown; version:
       // A changed address must not be one another source already collects from. (Sources that share a
       // feed on purpose, with different filters, keep editing their other settings.)
       const moved = kindChanged || sourceIdentity(nextKind, patch.config) !== sourceIdentity(String(before.kind), before.config as Record<string, unknown>);
-      const dup = moved ? await findDuplicateSource(nextKind, patch.config, id, tx) : null;
+      const dup = moved ? await findDuplicateSource(nextKind, patch.config, id, tx, scope.spaceId) : null;
       if (dup) throw new Conflict(`与已有信源重复：${dup.name}（${dup.id}）`);
     }
     const keys = Object.keys(patch) as Array<keyof typeof patch>;
@@ -244,24 +250,25 @@ export function sourceIdentity(kind: string, config: Record<string, unknown>): s
   return normalizeUrl(String(raw).replace(/^https:\/\/r\.jina\.ai\//, "")) ?? String(raw);
 }
 
-export async function findDuplicateSource(kind: string, config: Record<string, unknown>, exceptId?: string, db: Db = sql) {
+export async function findDuplicateSource(kind: string, config: Record<string, unknown>, exceptId?: string, db: Db = sql, spaceId = DEFAULT_SPACE_ID) {
   const identity = sourceIdentity(kind, config);
   if (!identity) return null;
-  const rows = await db<{ id: string; kind: string; config: Record<string, unknown>; name: string }[]>`SELECT id, kind, config, name FROM sources WHERE kind = ${kind}`;
+  const rows = await db<{ id: string; kind: string; config: Record<string, unknown>; name: string }[]>`SELECT id, kind, config, name FROM sources WHERE kind = ${kind} AND space_id = ${spaceId}`;
   return rows.find((r) => r.id !== exceptId && sourceIdentity(r.kind, r.config) === identity) ?? null;
 }
 
-export async function createSource(input: unknown, actor: string): Promise<BeforeJson<AdminSourceCreated>> {
+export async function createSource(input: unknown, actor: string, context?: SpaceContext): Promise<BeforeJson<AdminSourceCreated>> {
+  const scope = await resolveSpaceContext(context?.spaceId ?? DEFAULT_SPACE_ID, context?.configVersion);
   const s = CreateSchema.parse(input);
   s.first_party = s.tier === "T1";
   assertSupportedConfig(s.kind, s.config);
   return sql.begin(async (tx) => {
-    await tx`SELECT pg_advisory_xact_lock(hashtext('admin-source-identity'))`;
-    const dup = await findDuplicateSource(s.kind, s.config, undefined, tx);
+    await tx`SELECT pg_advisory_xact_lock(hashtext(${`admin-source-identity:${scope.spaceId}`}))`;
+    const dup = await findDuplicateSource(s.kind, s.config, undefined, tx, scope.spaceId);
     if (dup) return { created: false as const, duplicate: dup };
     const [row] = await tx<BeforeJson<AdminSource>[]>`
-    INSERT INTO sources (id, name, kind, config, tier, participation_mode, interval_minutes, first_party, tags, site_fulltext, syndicate_fulltext, next_fetch_at)
-    VALUES (${s.id}, ${s.name}, ${s.kind}, ${tx.json(s.config as never)}, ${s.tier}, ${s.participation_mode}, ${s.interval_minutes}, ${s.first_party}, ${s.tags},
+    INSERT INTO sources (id, space_id, name, kind, config, tier, participation_mode, interval_minutes, first_party, tags, site_fulltext, syndicate_fulltext, next_fetch_at)
+    VALUES (${s.id}, ${scope.spaceId}, ${s.name}, ${s.kind}, ${tx.json(s.config as never)}, ${s.tier}, ${s.participation_mode}, ${s.interval_minutes}, ${s.first_party}, ${s.tags},
             ${s.site_fulltext}, ${s.syndicate_fulltext}, now())
     ON CONFLICT (id) DO NOTHING RETURNING *`;
     if (!row) throw new Conflict(`信源 ID ${s.id} 已存在`);
@@ -270,8 +277,9 @@ export async function createSource(input: unknown, actor: string): Promise<Befor
   });
 }
 
-export async function fetchNow(id: string, actor: string) {
-  const [s] = await sql<{ id: string; kind: string; config: Record<string, unknown> }[]>`SELECT id, kind, config FROM sources WHERE id = ${id}`;
+export async function fetchNow(id: string, actor: string, context?: SpaceContext) {
+  const scope = await resolveSpaceContext(context?.spaceId ?? DEFAULT_SPACE_ID, context?.configVersion);
+  const [s] = await sql<{ id: string; kind: string; config: Record<string, unknown> }[]>`SELECT id, kind, config FROM sources WHERE id = ${id} AND space_id = ${scope.spaceId}`;
   if (!s) return null;
   const own = kindHooks(s.kind).find((h) => h.fetchNow)?.fetchNow;
   if (own) {
@@ -280,8 +288,8 @@ export async function fetchNow(id: string, actor: string) {
   }
   const jobId =
     s.kind === "mp_account"
-      ? await enqueue(QUEUES.mpCheck, { sourceId: id, reason: "manual" }, { singletonKey: `mp:${id}` })
-      : await enqueue(QUEUES.fetchSource, { sourceId: id, force: true }, { singletonKey: `manual:${id}` });
+      ? await enqueue(QUEUES.mpCheck, { sourceId: id, reason: "manual", context: scope }, { singletonKey: `mp:${id}` })
+      : await enqueue(QUEUES.fetchSource, { sourceId: id, force: true, context: scope }, { singletonKey: `manual:${id}` });
   await audit(actor, "source.fetch", `source:${id}`, null, null, { jobId });
   return { jobId };
 }

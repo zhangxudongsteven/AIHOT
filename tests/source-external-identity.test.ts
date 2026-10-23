@@ -9,6 +9,8 @@ import { closeDb, sql } from "@aihot/backend/db";
 import { stopBoss } from "@aihot/backend/jobs/queue";
 import { collectSource } from "@aihot/backend/sources/collect";
 import { upsertMaterial } from "@aihot/backend/content/materials";
+import { defaultSpaceConfig, storeSpaceConfig } from "@aihot/backend/spaces/context";
+import { cutoverSpaceIdentity } from "../scripts/space-cutover.ts";
 
 const T = tag();
 const published = new Date().toISOString();
@@ -49,4 +51,34 @@ test("stable external IDs revise the first material after URL changes without me
   version = 3;
   assert.equal((await collectSource(ids[0]!, { force: true })).created, 0);
   assert.equal((await sql`SELECT id FROM articles WHERE source_id = ${ids[0]!}`).length, 2);
+});
+
+test("the same listing in two spaces keeps separate articles, cursors and fetch runs", async () => {
+  await cutoverSpaceIdentity(sql);
+  const sources = [];
+  for (const name of ["a", "b"]) {
+    const spaceId = `listing-${name}-${T}`;
+    await sql`INSERT INTO spaces (id, slug) VALUES (${spaceId}, ${spaceId})`;
+    const context = await storeSpaceConfig(spaceId, defaultSpaceConfig());
+    await sql`UPDATE spaces SET active_config_version = ${context.configVersion} WHERE id = ${spaceId}`;
+    const id = `source-${spaceId}`;
+    await sql`INSERT INTO sources (id, space_id, name, kind, config, tier, participation_mode, cursor)
+      VALUES (${id}, ${spaceId}, ${id}, 'json_list', ${sql.json({ url: base, titlePaths: ["title"], externalIdPath: "id", urlTemplate: "https://example.org/shared/{slug}", publishedAtPath: "published" })},
+        'T2', 'hot_signal', ${sql.json({ initializedAt: published })})`;
+    sources.push({ id, context });
+  }
+  version = 10;
+  for (const source of sources) {
+    assert.equal((await collectSource(source.id, { force: true, context: source.context })).created, 1);
+    assert.equal((await collectSource(source.id, { force: true, context: source.context })).created, 0);
+  }
+  const [a, b] = sources;
+  version = 11;
+  assert.equal((await collectSource(a!.id, { force: true, context: a!.context })).revised, 1);
+  const articles = await sql`SELECT id, space_id, revision FROM articles WHERE source_id IN ${sql(sources.map((s) => s.id))} ORDER BY space_id`;
+  assert.equal(new Set(articles.map((r) => r.id)).size, 2);
+  assert.deepEqual(articles.map((r) => [r.space_id, r.revision]), [[a!.context.spaceId, 2], [b!.context.spaceId, 1]]);
+  assert.equal((await collectSource(b!.id, { force: true })).status, "skipped", "legacy collection cannot resolve another space's source");
+  const runs = await sql`SELECT DISTINCT space_id, source_id FROM fetch_runs WHERE source_id IN ${sql(sources.map((s) => s.id))} ORDER BY space_id`;
+  assert.deepEqual(runs.map((r) => [r.space_id, r.source_id]), sources.map((s) => [s.context.spaceId, s.id]));
 });

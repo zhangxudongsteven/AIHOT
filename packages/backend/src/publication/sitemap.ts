@@ -1,3 +1,4 @@
+import { publicationSpaceId, publicationCacheKey, publicationPath } from "./context.ts";
 // Sitemap from the same public metadata as pages. Process and HTTP caches share one five-minute
 // deadline; a saved copy may bridge a restart only for the remainder of that original lifetime.
 import { mkdir, readFile, stat, utimes, writeFile } from "node:fs/promises";
@@ -18,11 +19,11 @@ import { serverModules, type SitemapEntry } from "../modules.ts";
 
 const MAX_URLS = 45_000;
 const TTL_MS = 5 * 60 * 1000;
-const CACHE_FILE = path.join(config.dataDir, "sitemap-last.xml");
+const cacheFile = () => path.join(config.dataDir, publicationCacheKey() === "legacy:default" ? "sitemap-last.xml" : `sitemap-${sha256(publicationCacheKey()).slice(0, 24)}.xml`);
 
 interface SitemapDocument { xml: string; expiresAt: number }
 
-let lastGood: SitemapDocument | null = null;
+const documents = new Map<string, SitemapDocument>();
 
 type Entry = SitemapEntry;
 
@@ -49,7 +50,7 @@ export async function loadDiscoveryEntries(at = new Date(), limits?: { stories: 
           ',' ORDER BY p.article_id)) AS revision
       FROM publications p WHERE p.article_id IN (
         SELECT value #>> '{}' FROM jsonb_path_query(r.content, '$.**.itemId') AS cited(value))
-    ) citations ON true ORDER BY r.kind, r.key DESC`;
+    ) citations ON true WHERE r.space_id = ${publicationSpaceId()} ORDER BY r.kind, r.key DESC`;
   const reportRevision = (kind: string) => sha256(stableJson(reports.filter((r) => r.kind === kind)));
   const topics = await topicPageCounts(at, !limits);
   entries.push(
@@ -90,7 +91,7 @@ export async function loadDiscoveryEntries(at = new Date(), limits?: { stories: 
       WHERE f.story_id = st.id AND ${evidenceCondition()} AND ${listedCondition(at)})
     ORDER BY st.latest_at DESC NULLS LAST, st.id DESC ${limits ? sql`LIMIT ${limits.stories}` : sql``}`;
   for (const s of stories) entries.push({ loc: `/story/${s.public_id}`, revision: s.revision, changefreq: "daily", priority: 0.5 });
-  for (const m of serverModules()) if (m.sitemap?.entries) entries.push(...(await m.sitemap.entries()));
+  for (const m of publicationSpaceId() === "default" ? serverModules() : []) if (m.sitemap?.entries) entries.push(...(await m.sitemap.entries()));
   // Material/translation timestamps can also record a retry or a state repair. Hash the content;
   // without a dedicated public modification clock, omitting lastmod is more accurate than guessing.
   const items = await sql<{ id: string; revision: string }[]>`
@@ -101,7 +102,8 @@ export async function loadDiscoveryEntries(at = new Date(), limits?: { stories: 
     WHERE ${storyReportCondition(at)} AND p.indexable
     ORDER BY p.timeline_at DESC, p.article_id DESC ${limits ? sql`LIMIT ${Math.max(0, limits.urls - entries.length)}` : sql``}`;
   for (const it of items) entries.push({ loc: `/items/${it.id}`, revision: it.revision, changefreq: "monthly", priority: 0.5 });
-  return limits ? entries.slice(0, limits.urls) : entries;
+  const scoped = entries.map(entry => ({ ...entry, loc: publicationPath(entry.loc) }));
+  return limits ? scoped.slice(0, limits.urls) : scoped;
 }
 
 async function build(at: Date): Promise<string> {
@@ -119,27 +121,34 @@ async function build(at: Date): Promise<string> {
   return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${body}\n</urlset>\n`;
 }
 
-const rebuilding = shared<void, SitemapDocument>(() => "sitemap", refreshSitemap);
+const rebuilding = shared<void, SitemapDocument>(publicationCacheKey, refreshSitemap);
 
 export function loadSitemap(): Promise<SitemapDocument> {
+  const lastGood = documents.get(publicationCacheKey());
   if (lastGood && lastGood.expiresAt > Date.now()) return Promise.resolve(lastGood);
   return rebuilding();
 }
 
 async function refreshSitemap(): Promise<SitemapDocument> {
+  const key = publicationCacheKey();
+  let lastGood = documents.get(key);
+  const file = cacheFile();
   try {
     const at = Date.now();
     const xml = await build(new Date(at));
     lastGood = { xml, expiresAt: at + TTL_MS };
-    await mkdir(path.dirname(CACHE_FILE), { recursive: true });
+    documents.set(key, lastGood);
+    await mkdir(path.dirname(file), { recursive: true });
     // The file's timestamp preserves the same deadline when another process loads it after restart.
-    await writeFile(CACHE_FILE, xml).then(() => utimes(CACHE_FILE, new Date(at), new Date(at))).catch(() => {});
+    await writeFile(file, xml).then(() => utimes(file, new Date(at), new Date(at))).catch(() => {});
     return lastGood;
   } catch (error) {
     if (lastGood && lastGood.expiresAt > Date.now()) return lastGood;
-    const saved = await Promise.all([readFile(CACHE_FILE, "utf8"), stat(CACHE_FILE)]).catch(() => null);
+    const saved = await Promise.all([readFile(file, "utf8"), stat(file)]).catch(() => null);
     if (saved && saved[1].mtimeMs + TTL_MS > Date.now()) {
-      return (lastGood = { xml: saved[0], expiresAt: saved[1].mtimeMs + TTL_MS });
+      lastGood = { xml: saved[0], expiresAt: saved[1].mtimeMs + TTL_MS };
+      documents.set(key, lastGood);
+      return lastGood;
     }
     throw error;
   }

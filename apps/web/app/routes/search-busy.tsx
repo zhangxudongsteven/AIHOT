@@ -1,5 +1,7 @@
+import { unscopedPath } from "../lib/space-path";
+import { withSpaceMeta } from "../lib/seo";
 import { useEffect, useState } from "react";
-import { Link, useLocation } from "react-router";
+import { Link, useLocation } from "../lib/space-router";
 import { RingMark } from "@aihot/site/brand/Logo.tsx";
 import { PhoneBar } from "../components/shell/PhoneBar";
 import type { Screen } from "../components/shell/screens";
@@ -7,7 +9,7 @@ import { titled } from "../lib/seo";
 
 export const handle: Screen = { tab: "featured" };
 
-export function meta() {
+function routeMeta() {
   return [{ title: titled("搜索繁忙") }, { name: "robots", content: "noindex, follow" }];
 }
 export function headers() {
@@ -28,7 +30,7 @@ export default function SearchBusy() {
   }, [wait]);
   const kept = new URLSearchParams();
   for (const [k, v] of new URLSearchParams(search)) if (SEARCH_PARAMS.includes(k)) kept.append(k, v);
-  const base = pathname.startsWith("/all") ? "/all" : "/";
+  const base = unscopedPath(pathname).startsWith("/all") ? "/all" : "/";
   const retry = kept.toString() ? `${base}?${kept}` : base;
   const hasSearch = kept.has("q");
   const button = "inline-flex h-9 items-center rounded-full px-4 text-[13.5px]";
@@ -53,3 +55,5 @@ export default function SearchBusy() {
     </>
   );
 }
+
+export const meta = withSpaceMeta(routeMeta);

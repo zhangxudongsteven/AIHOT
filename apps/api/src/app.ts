@@ -16,7 +16,8 @@ import { registerMedia } from "./routes/media.ts";
 import { registerFeeds } from "./routes/feeds.ts";
 import { registerStatic } from "./routes/static.ts";
 import { registerMcp } from "./routes/mcp.ts";
-import { sendProblem } from "./http/respond.ts";
+import { registerLegacySpaceScope, registerSpaces } from "./routes/spaces.ts";
+import { applyPublicHeaders, sendProblem } from "./http/respond.ts";
 
 /** Quiet ordinary access logs, while keeping errors that happen after the route has returned. */
 class RequestLogs extends LogController {
@@ -41,6 +42,12 @@ export async function buildApp(): Promise<FastifyInstance> {
     genReqId: () => randomUUID(),
     bodyLimit: 10 * 1024 * 1024,
     routerOptions: { ignoreTrailingSlash: false, maxParamLength: 300 },
+    // Malformed path parameters fail before any route hook (including channel resolution).
+    frameworkErrors(error, req, reply) {
+      const path = (req.raw.url ?? "/").split("?")[0]!;
+      if (/^\/api\/v1(?:\/|$)/.test(path) || /^\/channels\/[^/]+\/openapi-v1\.json$/.test(path)) applyPublicHeaders(reply);
+      return sendProblem(req, reply, { status: error.statusCode ?? 400, code: "invalid_request", detail: "The request URL could not be processed." });
+    },
   });
 
   app.setChildLoggerFactory((logger, bindings, options, request) => {
@@ -89,6 +96,7 @@ export async function buildApp(): Promise<FastifyInstance> {
     return reply.header("Cache-Control", "no-store").send({ ok: true, db: "ok", ms: Math.round(performance.now() - started), release: process.env.AIHOT_RELEASE ?? "dev" });
   });
 
+  registerLegacySpaceScope(app);
   registerSite(app);
   registerOg(app);
   registerAdminAuth(app);
@@ -100,6 +108,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerFeeds(app);
   registerStatic(app);
   registerMcp(app);
+  registerSpaces(app);
   for (const m of serverModules()) m.http?.(app);
   registerV1Fallbacks(app);
 

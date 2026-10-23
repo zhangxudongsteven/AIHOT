@@ -1,3 +1,4 @@
+import { publicationSpaceId, publicationSpace, publicationCacheKey } from "./context.ts";
 // Stories (events) and the hot ranking through the public read layer. The website sees heat values;
 // v1 and MCP only see ranks and counts.
 import type { HeatPoint, HotResponse, StoryDetail, StoryReportView } from "@aihot/contracts/site";
@@ -27,17 +28,17 @@ function storyStatusFor(latestAt: Date | null, now: number): "active" | "watchin
 
 export async function resolveStory(publicId: string): Promise<StoryLookup> {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(publicId)) return { kind: "not_found" };
-  const [s] = await sql<{ id: number; merged_into: number | null }[]>`SELECT id, merged_into FROM stories WHERE public_id = ${publicId}`;
+  const [s] = await sql<{ id: number; merged_into: number | null }[]>`SELECT id, merged_into FROM stories WHERE space_id = ${publicationSpaceId()} AND public_id = ${publicId}`;
   let targetId: number | null = s ? (s.merged_into ?? null) : null;
   if (!s) {
-    const [alias] = await sql<{ story_id: number }[]>`SELECT story_id FROM story_aliases WHERE public_id = ${publicId}`;
+    const [alias] = await sql<{ story_id: number }[]>`SELECT story_id FROM story_aliases WHERE space_id = ${publicationSpaceId()} AND public_id = ${publicId}`;
     if (!alias) return { kind: "not_found" };
     targetId = alias.story_id;
   }
   if (targetId) {
     // Follow merge chains to the surviving story.
     for (let i = 0; i < 10; i++) {
-      const rows: Array<{ id: number; public_id: string; merged_into: number | null }> = await sql`SELECT id, public_id::text, merged_into FROM stories WHERE id = ${targetId}`;
+      const rows: Array<{ id: number; public_id: string; merged_into: number | null }> = await sql`SELECT id, public_id::text, merged_into FROM stories WHERE space_id = ${publicationSpaceId()} AND id = ${targetId}`;
       const t = rows[0];
       if (!t) return { kind: "not_found" };
       if (!t.merged_into) return { kind: "merged", target: t.public_id };
@@ -96,7 +97,7 @@ function reportView(r: ReportRow): StoryReportView {
 
 /** The story's reports newest first, its developments, and its latest and first non-mention reports. */
 async function storyContent(storyId: number, now: Date) {
-  const [s] = await sql<{ public_id: string; title: string }[]>`SELECT public_id::text, title FROM stories WHERE id = ${storyId}`;
+  const [s] = await sql<{ public_id: string; title: string }[]>`SELECT public_id::text, title FROM stories WHERE space_id = ${publicationSpaceId()} AND id = ${storyId}`;
   if (!s) return null;
   const reports = await storyReports(storyId, now);
   if (reports.length === 0) return null;
@@ -106,7 +107,7 @@ async function storyContent(storyId: number, now: Date) {
   const byFact = new Map<number, ReportRow[]>();
   for (const r of primaryReports) byFact.set(r.fact_id, [...(byFact.get(r.fact_id) ?? []), r]);
   const facts = await sql<{ id: number; public_id: string; title: string }[]>`
-    SELECT id, public_id, title FROM facts WHERE story_id = ${storyId}`;
+    SELECT id, public_id, title FROM facts WHERE space_id = ${publicationSpaceId()} AND story_id = ${storyId}`;
   const developments = facts
     .filter((f) => byFact.has(f.id))
     .map((f) => {
@@ -129,9 +130,9 @@ async function relatedStories(storyId: number, now: Date) {
     SELECT st.public_id::text, st.title, l.relation FROM story_links l JOIN stories st ON st.id = l.other_id
     LEFT JOIN LATERAL (
       SELECT count(*) FILTER (WHERE valid) AS reports, bool_and(valid) AS unchanged
-      FROM ${relatedEvidence(sql`l.story_id`, sql`l.other_id`, now)} evidence
+      FROM ${relatedEvidence(sql`l.story_id`, sql`l.other_id`, now, publicationSpaceId())} evidence
     ) support ON l.relation = 'related'
-    WHERE l.story_id = ${storyId} AND st.merged_into IS NULL
+    WHERE l.space_id = ${publicationSpaceId()} AND st.space_id = ${publicationSpaceId()} AND l.story_id = ${storyId} AND st.merged_into IS NULL
       AND (l.relation <> 'related' OR support.unchanged IS NOT FALSE OR support.reports >= ${RELATED_MIN_REPORTS})
       AND EXISTS (
       SELECT 1 FROM facts f JOIN fact_articles fa ON fa.fact_id = f.id JOIN publications p ON p.article_id = fa.article_id
@@ -145,7 +146,7 @@ export async function loadStoryDetail(storyId: number, now = new Date()): Promis
   if (!content) return null;
   const { s, reports, developments, latestReport, firstReportAt } = content;
   const [why] = await sql<{ p48: number; p6: number; r24: number }[]>`
-    WITH cs AS (SELECT * FROM ${currentSignals()} c WHERE story_id = ${storyId} AND observed_at <= ${now})
+    WITH cs AS (SELECT * FROM ${currentSignals(publicationSpaceId())} c WHERE story_id = ${storyId} AND observed_at <= ${now})
     SELECT count(DISTINCT participant_key) FILTER (WHERE observed_at > ${now}::timestamptz - interval '48 hours') AS p48,
            count(DISTINCT participant_key) FILTER (WHERE observed_at > ${now}::timestamptz - interval '6 hours'
              AND participant_key NOT IN (SELECT participant_key FROM cs x WHERE x.observed_at <= ${now}::timestamptz - interval '6 hours')) AS p6,
@@ -154,11 +155,13 @@ export async function loadStoryDetail(storyId: number, now = new Date()): Promis
   const ranking = await latestHotRanking();
   const entry = ranking?.entries.find((e) => e.storyId === storyId) ?? null;
   // Only hours observed in full are drawn (the chart leaves a gap otherwise), over one comparable group.
-  const heat = await heatSeries(storyId, now);
+  const space = publicationSpace();
+  const options = space ? { context: { spaceId: space.id, configVersion: space.configVersion } } : {};
+  const heat = await heatSeries(storyId, now, 7, options);
   // Complete when none of the sources behind the last 48 hours' participants is behind on collection.
-  const behind = behindSources(await sourceClocks(), now.getTime(), true);
+  const behind = behindSources(await sourceClocks(options), now.getTime(), true);
   const [partial] = behind.length
-    ? await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM ${currentSignals()} cs WHERE story_id = ${storyId} AND source_id = ANY(${behind}::text[])
+    ? await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM ${currentSignals(publicationSpaceId())} cs WHERE story_id = ${storyId} AND source_id = ANY(${behind}::text[])
                                   AND observed_at > ${now}::timestamptz - interval '48 hours' AND observed_at <= ${now}`
     : [{ n: 0 }];
   const [related, topics, texts] = await Promise.all([relatedStories(storyId, now), topicsOfStory(storyId, now), storyTexts([storyId], now)]);
@@ -207,7 +210,7 @@ async function sparklines(storyIds: number[], at: Date): Promise<Map<number, Arr
   const rows = storyIds.length
     ? await sql<{ story_id: number; hour: Date; heat: string }[]>`
         SELECT story_id, hour, heat FROM story_heat_hourly
-        WHERE story_id = ANY(${storyIds}::bigint[]) AND complete AND hour >= ${new Date(start)} AND hour <= ${new Date(end)}`
+        WHERE space_id = ${publicationSpaceId()} AND story_id = ANY(${storyIds}::bigint[]) AND complete AND hour >= ${new Date(start)} AND hour <= ${new Date(end)}`
     : [];
   const out = new Map<number, Array<number | null>>(storyIds.map((id) => [id, Array.from({ length: SPARK_HOURS + 1 }, () => null)]));
   for (const r of rows) {
@@ -220,7 +223,7 @@ async function sparklines(storyIds: number[], at: Date): Promise<Map<number, Arr
 
 // Shared by concurrent readers of a ranking, but read again each time: a cover's visibility and licence
 // follow publication changes.
-const hotCovers = shared((ranking: HotRanking) => String(ranking.id), queryHotCovers);
+const hotCovers = shared((ranking: HotRanking) => `${publicationCacheKey()}:${ranking.id}`, queryHotCovers);
 
 /** A picture per story from its public full-text reports, the representative first, wide enough for a card. */
 async function queryHotCovers({ entries }: HotRanking) {

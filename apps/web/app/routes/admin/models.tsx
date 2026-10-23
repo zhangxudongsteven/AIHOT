@@ -18,7 +18,7 @@ export async function loader({ request }: Route.LoaderArgs) {
 
 export const meta: Route.MetaFunction = () => [{ title: `模型与评测 · ${SITE.name} 后台` }];
 
-const SOURCE_LABEL = { admin: "后台切换", env: "环境变量", default: "代码默认" } as const;
+const SOURCE_LABEL = { admin: "后台切换", env: "环境变量", default: "代码默认", config: "频道配置" } as const;
 
 /** A cost the provider did not report and no price covers: a link to the prices when a module keeps them. */
 function Unpriced() {
@@ -37,7 +37,7 @@ export default function ModelsAdmin({ loaderData: m }: Route.ComponentProps) {
   return (
     <AdminPage
       title="模型与评测"
-      subtitle="每项能力当前用哪个模型、来自哪里（后台切换 > 环境变量 > 代码默认），以及近期的成功率、耗时与费用。切换只影响之后的新任务，已有结果不重算；换精选模型前先看 SelectBench 同批对比。"
+      subtitle="默认频道各项能力当前用哪个模型，以及全站近期的成功率、耗时与费用。精选和归组切换用于新评估，已排队任务保留原配置；周月报和翻译在下次调用时生效。其他频道通过各自配置管理；换精选模型前先看 SelectBench 同批对比。"
       actions={<FilterChips param="days" options={[{ value: "1", label: "24 小时" }, { value: "", label: "7 天" }, { value: "30", label: "30 天" }]} />}
     >
       <div className="grid grid-cols-1 gap-5">
@@ -157,12 +157,12 @@ export default function ModelsAdmin({ loaderData: m }: Route.ComponentProps) {
       <ReasonDialog
         open={!!target}
         title={`切换模型：${target?.label ?? ""}`}
-        description="只影响之后的新任务。选“恢复默认”会回到环境变量或代码默认。"
+        description="默认频道的精选和归组对新评估生效，已有任务保留原配置。周月报和翻译对下次调用生效。选“恢复默认”会回到环境变量或代码默认。"
         confirmLabel="切换"
         busy={pending === "switch"}
         onClose={() => setTarget(null)}
         onSubmit={async (reason) =>
-          (await run("POST", `/api/admin/models/${target!.key}`, { model: choice === "__default" ? null : choice, reason }, { label: "switch", success: "已切换，下一次调用生效" })) !== null
+          (await run("POST", `/api/admin/models/${target!.key}`, { model: choice === "__default" ? null : choice, reason }, { label: "switch", success: "模型设置已更新" })) !== null
         }
       >
         <Field label="模型">

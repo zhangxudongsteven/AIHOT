@@ -1,7 +1,9 @@
+import { useLocation } from "react-router";
+import { browserSpace, unscopedPath, spaceSlug } from "./space-path.ts";
 // Reader state kept only in this browser, and the site's one guarded way to browser storage. Keep the
 // keys and formats once readers have data under them: existing readers' data must stay readable as-is.
 // Storage failures degrade silently.
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { beijingDate } from "@aihot/contracts/time";
 
 export const KEYS = {
@@ -13,6 +15,13 @@ export const KEYS = {
   feedbackDraft: "aihot-feedback-draft-v1",
   recentSearches: "aihot-recent-searches",
 } as const;
+
+/** Appearance stays shared; reading data belongs to one channel. Old keys remain the default. */
+export function scopedStorageKey(key: string, slug = browserSpace()): string {
+  if (!slug || slug === "default") return key;
+  const scoped: readonly string[] = [KEYS.starred, KEYS.read, KEYS.feedbackDraft, KEYS.recentSearches, "aihot:last-page"];
+  return scoped.includes(key) ? `aihot:space:${encodeURIComponent(slug)}:${key}` : key;
+}
 
 const STARRED_LIMIT = 500;
 const READ_LIMIT = 5000;
@@ -44,17 +53,17 @@ function storage(kind: StorageKind): Storage | null {
 }
 
 /** A stored string; null when it is missing or storage is unavailable. */
-export function readRaw(key: string, kind: StorageKind = "local"): string | null {
+export function readRaw(key: string, kind: StorageKind = "local", slug = browserSpace()): string | null {
   try {
-    return storage(kind)?.getItem(key) ?? null;
+    return storage(kind)?.getItem(scopedStorageKey(key, slug)) ?? null;
   } catch {
     return null;
   }
 }
 
 /** A stored JSON value; null when it is missing, unreadable or not JSON. */
-export function readJson(key: string, kind: StorageKind = "local"): unknown {
-  const raw = readRaw(key, kind);
+export function readJson(key: string, kind: StorageKind = "local", slug = browserSpace()): unknown {
+  const raw = readRaw(key, kind, slug);
   if (!raw) return null;
   try {
     return JSON.parse(raw);
@@ -64,12 +73,13 @@ export function readJson(key: string, kind: StorageKind = "local"): unknown {
 }
 
 /** Stores a string, or removes the key for null; false when nothing was saved (storage full or unavailable). */
-export function writeRaw(key: string, value: string | null, kind: StorageKind = "local"): boolean {
+export function writeRaw(key: string, value: string | null, kind: StorageKind = "local", slug = browserSpace()): boolean {
   try {
     const s = storage(kind);
     if (!s) return false;
-    if (value === null) s.removeItem(key);
-    else s.setItem(key, value);
+    const storedKey = scopedStorageKey(key, slug);
+    if (value === null) s.removeItem(storedKey);
+    else s.setItem(storedKey, value);
     return true;
   } catch {
     return false;
@@ -98,33 +108,33 @@ function onStorage(event: StorageEvent) {
   // Clear the snapshot once, before notifying all cards. Each key is parsed at most once.
   emit(event.key ?? undefined);
 }
-function subscribeKey(key: string) {
+function subscribeKey(key: string, slug = browserSpace()) {
   return (listener: () => void) => {
-    let callbacks = listeners.get(key);
-    if (!callbacks) listeners.set(key, callbacks = new Set());
+    const storedKey = scopedStorageKey(key, slug);
+    let callbacks = listeners.get(storedKey);
+    if (!callbacks) listeners.set(storedKey, callbacks = new Set());
     callbacks.add(listener);
     if (subscribers++ === 0) window.addEventListener("storage", onStorage);
     return () => {
       callbacks.delete(listener);
-      if (callbacks.size === 0) listeners.delete(key);
+      if (callbacks.size === 0) listeners.delete(storedKey);
       if (--subscribers === 0) window.removeEventListener("storage", onStorage);
     };
   };
 }
-const subscribeStarred = subscribeKey(KEYS.starred);
-const subscribeRead = subscribeKey(KEYS.read);
 const subscribeTheme = subscribeKey(KEYS.theme);
 const subscribeFont = subscribeKey(KEYS.font);
 const subscribeChangelog = subscribeKey(KEYS.changelogSeen);
-const subscribeRecentSearches = subscribeKey(KEYS.recentSearches);
 
 // Snapshot cache so useSyncExternalStore gets stable references between changes.
 const cache = new Map<string, unknown>();
-function cached<T>(key: string, compute: () => T): T {
+function cached<T>(key: string, compute: () => T, slug = browserSpace()): T {
+  key = scopedStorageKey(key, slug);
   if (!cache.has(key)) cache.set(key, compute());
   return cache.get(key) as T;
 }
-function invalidate(key: string) {
+function invalidate(key: string, slug = browserSpace()) {
+  key = scopedStorageKey(key, slug);
   cache.delete(key);
   emit(key);
 }
@@ -167,16 +177,16 @@ function normalizeStarred(v: Record<string, unknown>): LocalStarredItem {
   };
 }
 
-export function getStarred(): LocalStarredItem[] {
+export function getStarred(slug = browserSpace()): LocalStarredItem[] {
   return cached(KEYS.starred, () => {
-    const parsed = readJson(KEYS.starred);
+    const parsed = readJson(KEYS.starred, "local", slug);
     return Array.isArray(parsed) ? parsed.filter(isStarredItem).map((v) => normalizeStarred(v as unknown as Record<string, unknown>)).slice(0, STARRED_LIMIT) : [];
-  });
+  }, slug);
 }
 
 const starredSetCache = { items: null as LocalStarredItem[] | null, ids: new Set<string>() };
-function isStarred(id: string): boolean {
-  const items = getStarred();
+function isStarred(id: string, slug = browserSpace()): boolean {
+  const items = getStarred(slug);
   if (starredSetCache.items !== items) {
     starredSetCache.items = items;
     starredSetCache.ids = new Set(items.map((item) => item.id));
@@ -184,37 +194,37 @@ function isStarred(id: string): boolean {
   return starredSetCache.ids.has(id);
 }
 
-export function toggleStar(item: Omit<LocalStarredItem, "savedAt">): boolean {
+export function toggleStar(item: Omit<LocalStarredItem, "savedAt">, slug = browserSpace()): boolean {
   return editLocalData(() => {
-    if (starredUnreadable()) return false;
-    const list = getStarred();
+    if (starredUnreadable(slug)) return false;
+    const list = getStarred(slug);
     const exists = list.some((s) => s.id === item.id);
     const next = exists ? list.filter((s) => s.id !== item.id) : [{ ...item, savedAt: new Date().toISOString() }, ...list].slice(0, STARRED_LIMIT);
-    const saved = writeRaw(KEYS.starred, JSON.stringify(next));
-    invalidate(KEYS.starred);
+    const saved = writeRaw(KEYS.starred, JSON.stringify(next), "local", slug);
+    invalidate(KEYS.starred, slug);
     return saved && !exists;
   });
 }
 
-export function removeStar(id: string) {
+export function removeStar(id: string, slug = browserSpace()) {
   editLocalData(() => {
-    if (starredUnreadable()) return;
-    writeRaw(KEYS.starred, JSON.stringify(getStarred().filter((s) => s.id !== id)));
-    invalidate(KEYS.starred);
+    if (starredUnreadable(slug)) return;
+    writeRaw(KEYS.starred, JSON.stringify(getStarred(slug).filter((s) => s.id !== id)), "local", slug);
+    invalidate(KEYS.starred, slug);
   });
 }
 
 // read items (LRU, newest first)
-export function getReadIds(): string[] {
+export function getReadIds(slug = browserSpace()): string[] {
   return cached(KEYS.read, () => {
-    const parsed = readJson(KEYS.read);
+    const parsed = readJson(KEYS.read, "local", slug);
     return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === "string" && ID_PATTERN.test(v)).slice(0, READ_LIMIT) : [];
-  });
+  }, slug);
 }
 
 const readSetCache = { ids: null as string[] | null, set: new Set<string>() };
-function getReadSet(): Set<string> {
-  const ids = getReadIds();
+function getReadSet(slug = browserSpace()): Set<string> {
+  const ids = getReadIds(slug);
   if (readSetCache.ids !== ids) {
     readSetCache.ids = ids;
     readSetCache.set = new Set(ids);
@@ -222,14 +232,14 @@ function getReadSet(): Set<string> {
   return readSetCache.set;
 }
 
-export function markRead(id: string) {
+export function markRead(id: string, slug = browserSpace()) {
   editLocalData(() => {
     if (!ID_PATTERN.test(id)) return;
-    const ids = getReadIds();
+    const ids = getReadIds(slug);
     if (ids[0] === id) return;
     const next = [id, ...ids.filter((v) => v !== id)].slice(0, READ_LIMIT);
-    writeRaw(KEYS.read, JSON.stringify(next));
-    invalidate(KEYS.read);
+    writeRaw(KEYS.read, JSON.stringify(next), "local", slug);
+    invalidate(KEYS.read, slug);
   });
 }
 
@@ -335,25 +345,25 @@ export function setChangelogSeen(version: string) {
 }
 
 // recent searches (newest first, at most RECENT_SEARCH_LIMIT; this browser only)
-function getRecentSearches(): string[] {
+function getRecentSearches(slug = browserSpace()): string[] {
   return cached(KEYS.recentSearches, () => {
-    const parsed = readJson(KEYS.recentSearches);
+    const parsed = readJson(KEYS.recentSearches, "local", slug);
     return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === "string" && v.trim() !== "").slice(0, RECENT_SEARCH_LIMIT) : [];
-  });
+  }, slug);
 }
 
 /** Puts a search first (the same words in another case replace the older entry). */
-export function addRecentSearch(query: string) {
+export function addRecentSearch(query: string, slug = browserSpace()) {
   const q = query.trim().slice(0, RECENT_SEARCH_MAX_CHARS);
   if (!q) return;
-  const rest = getRecentSearches().filter((v) => v.toLowerCase() !== q.toLowerCase());
-  writeRaw(KEYS.recentSearches, JSON.stringify([q, ...rest].slice(0, RECENT_SEARCH_LIMIT)));
-  invalidate(KEYS.recentSearches);
+  const rest = getRecentSearches(slug).filter((v) => v.toLowerCase() !== q.toLowerCase());
+  writeRaw(KEYS.recentSearches, JSON.stringify([q, ...rest].slice(0, RECENT_SEARCH_LIMIT)), "local", slug);
+  invalidate(KEYS.recentSearches, slug);
 }
 
-export function clearRecentSearches() {
-  writeRaw(KEYS.recentSearches, null);
-  invalidate(KEYS.recentSearches);
+export function clearRecentSearches(slug = browserSpace()) {
+  writeRaw(KEYS.recentSearches, null, "local", slug);
+  invalidate(KEYS.recentSearches, slug);
 }
 
 // the page the reader was on (feedback records where a problem was seen)
@@ -362,7 +372,7 @@ const NOT_A_PLACE = /^\/(feedback|more)(\/|$)|^\/admin(\/|$)/;
 
 /** Called on every in-site navigation: remembers the latest real page, never feedback, "更多" or the admin. */
 export function rememberPage(path: string) {
-  if (!NOT_A_PLACE.test(path)) writeRaw(LAST_PAGE_KEY, path, "session");
+  if (!NOT_A_PLACE.test(unscopedPath(path))) writeRaw(LAST_PAGE_KEY, path, "session");
 }
 
 export function lastPage(): string | null {
@@ -373,15 +383,16 @@ export function lastPage(): string | null {
 // export / import (version 1)
 export interface ExportBundle {
   version: 1;
+  space?: string;
   starred: LocalStarredItem[];
   read: string[];
   theme: "light" | "dark" | "auto" | null;
   font?: "system" | "browser";
 }
 
-export function exportBundle(): ExportBundle {
+export function exportBundle(slug = browserSpace()): ExportBundle {
   const pref = getThemePreference();
-  return { version: 1, starred: getStarred(), read: getReadIds(), theme: pref ?? "auto", font: getFontPreference() ?? "system" };
+  return { version: 1, ...(slug && slug !== "default" ? { space: slug } : {}), starred: getStarred(slug), read: getReadIds(slug), theme: pref ?? "auto", font: getFontPreference() ?? "system" };
 }
 
 export interface ImportReport {
@@ -396,7 +407,7 @@ export interface ImportReport {
 }
 
 /** Merge: existing stars are not overwritten, read ids are unioned, appearance only if unset. */
-export function importBundle(text: string): ImportReport {
+export function importBundle(text: string, slug = browserSpace()): ImportReport {
   if (text.length > IMPORT_MAX_CHARS) throw new Error("文件过大（上限 2,000,000 字符）");
   let data: unknown;
   try {
@@ -406,17 +417,18 @@ export function importBundle(text: string): ImportReport {
   }
   const d = data as Partial<ExportBundle>;
   if (!d || typeof d !== "object" || d.version !== 1) throw new Error("文件格式不对（需要 version: 1）");
+  if ((d.space ?? "default") !== (slug ?? "default")) throw new Error("这份备份属于另一个频道，请切换到对应频道后导入。");
   return mergeLocalData({
     starred: Array.isArray(d.starred) ? d.starred : [],
     read: Array.isArray(d.read) ? d.read : [],
     theme: d.theme ?? null,
     font: d.font ?? null,
-  });
+  }, slug);
 }
 
 /** Stored stars that cannot be read (not JSON, not a list): an import must not write over them. */
-function starredUnreadable(): boolean {
-  const raw = readRaw(KEYS.starred);
+function starredUnreadable(slug = browserSpace()): boolean {
+  const raw = readRaw(KEYS.starred, "local", slug);
   if (!raw) return false;
   try {
     return !Array.isArray(JSON.parse(raw));
@@ -425,11 +437,11 @@ function starredUnreadable(): boolean {
   }
 }
 
-function mergeLocalData(incoming: { starred: unknown[]; read: unknown[]; theme: unknown; font?: unknown }): ImportReport {
+function mergeLocalData(incoming: { starred: unknown[]; read: unknown[]; theme: unknown; font?: unknown }, slug = browserSpace()): ImportReport {
   return editLocalData(() => {
     // The reader's own data stays recoverable (export it, or fix it) rather than replaced by the import.
-    if (starredUnreadable()) throw new Error("这台设备上已有的收藏数据无法读取，为避免覆盖，这次没有导入。");
-    const current = getStarred();
+    if (starredUnreadable(slug)) throw new Error("这台设备上已有的收藏数据无法读取，为避免覆盖，这次没有导入。");
+    const current = getStarred(slug);
     const have = new Set(current.map((s) => s.id));
     const additions: LocalStarredItem[] = [];
     let starredSkipped = 0;
@@ -444,9 +456,9 @@ function mergeLocalData(incoming: { starred: unknown[]; read: unknown[]; theme: 
     starredSkipped += additions.length - accepted.length;
     const mergedStarred = [...current, ...accepted].sort((a, b) => Date.parse(b.savedAt) - Date.parse(a.savedAt));
     // An import is reported only after it was written; a failure here leaves the browser as it was.
-    if (!writeRaw(KEYS.starred, JSON.stringify(mergedStarred))) throw new Error("浏览器存储已满或不可用，这次没有导入任何内容。");
+    if (!writeRaw(KEYS.starred, JSON.stringify(mergedStarred), "local", slug)) throw new Error("浏览器存储已满或不可用，这次没有导入任何内容。");
 
-    const readIds = getReadIds();
+    const readIds = getReadIds(slug);
     const readHave = new Set(readIds);
     const readAdditions: string[] = [];
     let readSkipped = 0;
@@ -458,7 +470,7 @@ function mergeLocalData(incoming: { starred: unknown[]; read: unknown[]; theme: 
     }
     const readRoom = Math.max(0, READ_LIMIT - readIds.length);
     readSkipped += Math.max(0, readAdditions.length - readRoom);
-    const readFailed = !writeRaw(KEYS.read, JSON.stringify([...readIds, ...readAdditions.slice(0, readRoom)]));
+    const readFailed = !writeRaw(KEYS.read, JSON.stringify([...readIds, ...readAdditions.slice(0, readRoom)]), "local", slug);
 
     let themeApplied = false;
     if (!getThemePreference() && (incoming.theme === "light" || incoming.theme === "dark")) {
@@ -479,15 +491,21 @@ const EMPTY_STARRED: LocalStarredItem[] = [];
 const EMPTY_SET = new Set<string>();
 
 export function useStarred(): LocalStarredItem[] {
-  return useSyncExternalStore(subscribeStarred, getStarred, () => EMPTY_STARRED);
+  const slug = spaceSlug(useLocation().pathname);
+  const subscribe = useMemo(() => subscribeKey(KEYS.starred, slug), [slug]);
+  return useSyncExternalStore(subscribe, () => getStarred(slug), () => EMPTY_STARRED);
 }
 
 export function useIsStarred(id: string): boolean {
-  return useSyncExternalStore(subscribeStarred, () => isStarred(id), () => false);
+  const slug = spaceSlug(useLocation().pathname);
+  const subscribe = useMemo(() => subscribeKey(KEYS.starred, slug), [slug]);
+  return useSyncExternalStore(subscribe, () => isStarred(id, slug), () => false);
 }
 
 export function useReadSet(): Set<string> {
-  return useSyncExternalStore(subscribeRead, getReadSet, () => EMPTY_SET);
+  const slug = spaceSlug(useLocation().pathname);
+  const subscribe = useMemo(() => subscribeKey(KEYS.read, slug), [slug]);
+  return useSyncExternalStore(subscribe, () => getReadSet(slug), () => EMPTY_SET);
 }
 
 export function useThemePreference(): ThemePreference {
@@ -504,5 +522,7 @@ export function useChangelogSeen(): string | null {
 
 const NO_SEARCHES: string[] = [];
 export function useRecentSearches(): string[] {
-  return useSyncExternalStore(subscribeRecentSearches, getRecentSearches, () => NO_SEARCHES);
+  const slug = spaceSlug(useLocation().pathname);
+  const subscribe = useMemo(() => subscribeKey(KEYS.recentSearches, slug), [slug]);
+  return useSyncExternalStore(subscribe, () => getRecentSearches(slug), () => NO_SEARCHES);
 }

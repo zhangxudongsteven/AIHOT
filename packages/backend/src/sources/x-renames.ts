@@ -8,6 +8,7 @@ import { audit } from "../audit.ts";
 import { requestRepublish } from "../jobs/publication.ts";
 import { getTweet, privateAccountRefusal } from "../providers/socialdata.ts";
 import { collectSource } from "./collect.ts";
+import { resolveSpaceContext } from "../spaces/context.ts";
 import { X_HANDLE, xHandle } from "./account.ts";
 
 const DAY_MS = 86400_000;
@@ -24,25 +25,26 @@ export interface XRename {
 export async function followXRenames(opts: { now?: number; pauseMs?: number } = {}): Promise<{ checked: number; renamed: XRename[]; privateAccounts: string[] }> {
   const now = opts.now ?? Date.now();
   const window = new Date(now).toISOString().slice(0, 10);
-  const quiet = await sql<{ id: string; name: string; query: string; tweet_ids: string[] }[]>`
-    SELECT s.id, s.name, s.config->>'query' AS query, a.tweet_ids
+  const quiet = await sql<{ id: string; space_id: string; name: string; query: string; tweet_ids: string[] }[]>`
+    SELECT s.id, s.space_id, s.name, s.config->>'query' AS query, a.tweet_ids
     FROM sources s CROSS JOIN LATERAL (
       SELECT array_agg(tweet_id ORDER BY discovered_at DESC, published_at DESC NULLS LAST) AS tweet_ids, max(discovered_at) AS discovered_at FROM (
         SELECT x_post->>'tweetId' AS tweet_id, discovered_at, published_at FROM articles WHERE source_id = s.id AND x_post ? 'tweetId'
         ORDER BY discovered_at DESC, published_at DESC NULLS LAST LIMIT 3) newest) a
-    WHERE s.enabled AND s.kind = 'x_search' AND s.config->>'query' ~* ${X_HANDLE.source} AND a.discovered_at < ${new Date(now - DAY_MS)}
+    WHERE s.enabled AND EXISTS (SELECT 1 FROM spaces sp WHERE sp.id = s.space_id AND sp.enabled) AND s.kind = 'x_search' AND s.config->>'query' ~* ${X_HANDLE.source} AND a.discovered_at < ${new Date(now - DAY_MS)}
     ORDER BY s.id`;
   const pause = () => opts.pauseMs === 0 ? null : new Promise((r) => setTimeout(r, opts.pauseMs ?? 4000));
   const renamed: XRename[] = [];
   const privateAccounts: string[] = [];
   let lookups = 0;
   for (const s of quiet) {
+    const context = await resolveSpaceContext(s.space_id);
     const from = xHandle({ query: s.query })!;
     let to: string | undefined;
     for (const tweetId of s.tweet_ids) {
       if (lookups++ > 0) await pause();
       try {
-        to = (await getTweet(tweetId, { purpose: "x_rename_check", subject: `source:${s.id}`, window }))?.user.screen_name;
+        to = (await getTweet(tweetId, { purpose: "x_rename_check", subject: `source:${s.id}`, window, context }))?.user.screen_name;
       } catch (error) {
         // The refusal stays on its receipt; the unverified account is reported and the others go on.
         if (!privateAccountRefusal(error)) throw error;
@@ -61,7 +63,7 @@ export async function followXRenames(opts: { now?: number; pauseMs?: number } = 
         { name: s.name, config: { query: s.query } }, { name, config: { query } }, { db: tx });
       await requestRepublish(tx, s.id, "system");
     });
-    const read = await collectSource(s.id, { xSince: s.tweet_ids[0] });
+    const read = await collectSource(s.id, { xSince: s.tweet_ids[0], context });
     renamed.push({ sourceId: s.id, from, to, found: read.found });
   }
   return { checked: quiet.length, renamed, privateAccounts };

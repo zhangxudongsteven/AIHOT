@@ -149,7 +149,7 @@ export async function fetchJsonList(source: SourceRow): Promise<Candidate[]> {
   const embedded = c.mode === "html_json_key" || c.mode === "html_window_var";
   // A page that blocks our addresses can be read through Jina's rendered HTML, which keeps its scripts.
   const text = embedded && url.startsWith(JINA_PREFIX)
-    ? (await jinaRead(url.slice(JINA_PREFIX.length), { purpose: "source_listing", subject: `source:${source.id}`, format: "html", perRead: true })).markdown
+    ? (await jinaRead(url.slice(JINA_PREFIX.length), { context: source.context, purpose: "source_listing", subject: `source:${source.id}`, format: "html", perRead: true })).markdown
     : requireOk(await fetchListing(url, {
       redirectPolicy: "same-origin",
       method: c.method ?? "GET",

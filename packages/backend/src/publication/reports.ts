@@ -1,7 +1,8 @@
+import { publicationSpaceId, publicationCacheKey, publicationConfig } from "./context.ts";
 // Reports through the public read layer: website DTOs and the v1 shapes. Only real reports are
 // listed; a missing date is a 404, never another day. Withdrawn citations are marked, not shown.
 import type { ReportCitation, ReportDetail, ReportIndexEntry, ReportNavigationEntry, ReportKind } from "@aihot/contracts/site";
-import { REPORTS, SITE, withSubject } from "@aihot/site";
+import { EDITION_TIMES, REPORTS, SITE, withSubject } from "@aihot/site";
 import { sql } from "../db.ts";
 import { cached, type Cached } from "../lib/cache.ts";
 import { proxiedImage, proxiedImageSet } from "../media/imgproxy.ts";
@@ -9,8 +10,20 @@ import { isoWeekRange, monthRange } from "@aihot/contracts/time";
 import { dailyUrl, itemUrl, periodUrl, siteUrl } from "./links.ts";
 import { publicSourceName } from "./rules.ts";
 import { listedCondition } from "./scope.ts";
+import { DEFAULT_SPACE_ID } from "../spaces/context.ts";
+import { RELEASE } from "@aihot/industry/taxonomy";
 
 export type { ReportKind };
+
+export function reportEditionWhen() {
+  const times = publicationConfig()?.reports?.editionTimes ?? EDITION_TIMES;
+  return { daily: `每天 ${times.daily}`, weekly: `每周一 ${times.weekly}`, monthly: `每月 1 日 ${times.monthly}` };
+}
+
+export function publicReportSettings() {
+  const configured = publicationConfig()?.reports;
+  return { editionWhen: reportEditionWhen(), releaseUnit: configured ? configured.release?.unit ?? null : publicationSpaceId() === DEFAULT_SPACE_ID ? RELEASE?.unit ?? null : null };
+}
 
 interface ReportRow {
   kind: ReportKind;
@@ -23,6 +36,7 @@ interface ReportRow {
 
 interface Availability {
   available: boolean;
+  inCurrentSpace: boolean;
   /** The article's public summary, for issues saved before summaries were frozen into them. */
   summary: string | null;
   firstParty: boolean;
@@ -35,14 +49,15 @@ interface Availability {
 async function availability(ids: string[]): Promise<Map<string, Availability>> {
   const out = new Map<string, Availability>();
   if (ids.length === 0) return out;
-  const rows = await sql<{ id: string; available: boolean; summary: string | null; first_party: boolean; source_id: string; source_name: string | null; icon_url: string | null; at: Date | null }[]>`
-    SELECT p.article_id AS id, (${listedCondition(new Date())}) AS available, p.summary, (s.tier = 'T1') AS first_party, p.source_id, s.name AS source_name, s.icon_url,
+  const rows = await sql<{ id: string; space_id: string; available: boolean; summary: string | null; first_party: boolean; source_id: string; source_name: string | null; icon_url: string | null; at: Date | null }[]>`
+    SELECT p.article_id AS id, p.space_id, (${listedCondition(new Date())}) AS available, p.summary, (s.tier = 'T1') AS first_party, p.source_id, s.name AS source_name, s.icon_url,
       coalesce(p.published_at, p.discovered_at) AS at
     FROM publications p LEFT JOIN sources s ON s.id = p.source_id
     WHERE p.article_id IN ${sql(ids)}`;
   for (const r of rows) {
     out.set(r.id, {
       available: r.available,
+      inCurrentSpace: r.space_id === publicationSpaceId(),
       summary: r.summary,
       firstParty: r.first_party,
       sourceId: r.source_id,
@@ -50,6 +65,9 @@ async function availability(ids: string[]): Promise<Map<string, Availability>> {
       sourceIcon: r.icon_url,
       publishedAt: r.at,
     });
+  }
+  if (publicationSpaceId() !== DEFAULT_SPACE_ID) {
+    for (const id of ids) if (!out.has(id)) out.set(id, { available: false, inCurrentSpace: false, summary: null, firstParty: false, sourceId: null, sourceName: null, sourceIcon: null, publishedAt: null });
   }
   return out;
 }
@@ -61,7 +79,13 @@ async function unavailableIds(ids: string[]): Promise<Set<string>> {
   const rows = await sql<{ id: string }[]>`
     SELECT p.article_id AS id FROM publications p
     WHERE p.article_id = ANY(${unique}::text[]) AND NOT (${listedCondition(new Date())})`;
-  return new Set(rows.map((r) => r.id));
+  const gone = new Set(rows.map((r) => r.id));
+  if (publicationSpaceId() !== DEFAULT_SPACE_ID) {
+    const local = await sql<{ id: string }[]>`SELECT article_id AS id FROM publications WHERE space_id = ${publicationSpaceId()} AND article_id = ANY(${unique}::text[])`;
+    const known = new Set(local.map(r => r.id));
+    for (const id of unique) if (!known.has(id)) gone.add(id);
+  }
+  return gone;
 }
 
 /**
@@ -80,7 +104,7 @@ export async function reportIndexRows(kind: ReportKind, limit: number) {
          FROM jsonb_array_elements(jsonb_path_query_array(content,
            CASE WHEN kind = 'daily' THEN '$.sections[*].items[*]'::jsonpath ELSE '$.themes[*].storyRefs[*]'::jsonpath END
          )) WITH ORDINALITY AS cited(item, ord))))) AS content
-    FROM reports WHERE kind = ${kind} ORDER BY key DESC LIMIT ${limit}`;
+    FROM reports WHERE space_id = ${publicationSpaceId()} AND kind = ${kind} ORDER BY key DESC LIMIT ${limit}`;
 }
 
 /** The entries an issue cites in reading order: a daily's sections, a weekly's or monthly's themes. */
@@ -155,7 +179,7 @@ async function dailyLeads(rows: Array<{ key: string; content: Record<string, any
     SELECT r.key, (SELECT i->>'summary' FROM jsonb_path_query(r.content, '$.sections[*].items[*]') i
       WHERE i->>'itemId' = wanted.item_id LIMIT 1) AS summary
     FROM reports r JOIN jsonb_to_recordset(${sql.json(replacements)}) AS wanted(key text, item_id text) ON wanted.key = r.key
-    WHERE r.kind = 'daily'`;
+    WHERE r.space_id = ${publicationSpaceId()} AND r.kind = 'daily'`;
   for (const p of paragraphs) leads.get(p.key)!.leadParagraph = p.summary;
   return leads;
 }
@@ -175,7 +199,7 @@ function periodOverview(content: Record<string, any>, kind: "weekly" | "monthly"
 /** A weekly or monthly's own headline; the composer's "<site name> 周报 · 2026-W38" names the issue, not its news. */
 function periodicHeadline(content: Record<string, any>): string | null {
   const text = String(content.headline ?? content.title ?? "");
-  const issueName = text.startsWith(`${SITE.name} `) && /^[周月]报 · /.test(text.slice(SITE.name.length + 1));
+  const issueName = text.startsWith(`${reportSiteName()} `) && /^[周月]报 · /.test(text.slice(reportSiteName().length + 1));
   return text && !issueName ? text : null;
 }
 
@@ -198,6 +222,9 @@ const goneIn = (avail: Map<string, Availability>) => new Set([...avail].filter((
 
 /** Items absent from this database (older than the imported window) stay cited as they were published. */
 const stillPublic = (raw: Record<string, any>, avail: Map<string, Availability>) => !raw.itemId || (avail.get(raw.itemId)?.available ?? true);
+
+/** A foreign citation was never published on this site; unlike a withdrawal, even its title is private. */
+const belongsHere = (raw: Record<string, any>, avail: Map<string, Availability>) => !raw.itemId || (avail.get(raw.itemId)?.inCurrentSpace ?? true);
 
 /** Frozen citation fields, with current source metadata and a public summary only if none was saved. */
 function citationMetadata(raw: Record<string, any>, a: Availability | undefined) {
@@ -255,7 +282,7 @@ function citedSources(content: Record<string, any>, kind: "daily" | "periodic", 
 function entryCitation(raw: Record<string, any>, avail: Map<string, Availability>): ReportCitation {
   const citation = citationFrom(raw, avail);
   if (!citation.available) return citation;
-  const related: ReportCitation[] = (raw.related ?? []).map((r: Record<string, any>) => ({ ...citationFrom(r, avail), summary: null }));
+  const related: ReportCitation[] = (raw.related ?? []).filter((r: Record<string, any>) => belongsHere(r, avail)).map((r: Record<string, any>) => ({ ...citationFrom(r, avail), summary: null }));
   return {
     ...citation,
     ...(Number(raw.sources) > 1 ? { otherSources: Number(raw.sources) - 1 } : {}),
@@ -300,7 +327,7 @@ async function leadCover(itemId: string): Promise<{ url: string; srcSet?: string
       SELECT m FROM jsonb_array_elements(coalesce(a.media, '[]'::jsonb)) m
       WHERE m->>'kind' = 'image' AND coalesce((m->>'width')::numeric, 800) >= 480 LIMIT 1
     ) img
-    WHERE (p.article_id = ${itemId} OR p.story_id = (SELECT story_id FROM publications WHERE article_id = ${itemId}))
+    WHERE (p.article_id = ${itemId} OR p.story_id = (SELECT story_id FROM publications WHERE space_id = ${publicationSpaceId()} AND article_id = ${itemId}))
       AND ${listedCondition(new Date())} AND p.body_mode <> 'summary'
     ORDER BY (p.article_id = ${itemId}) DESC, p.first_party DESC, coalesce(p.score, 0) DESC, p.article_id
     LIMIT 1`;
@@ -317,16 +344,16 @@ function readingMinutes(text: string): number {
 
 async function neighbors(kind: ReportKind, key: string): Promise<{ prev: string | null; next: string | null }> {
   const [row] = await sql<{ prev: string | null; next: string | null }[]>`
-    SELECT (SELECT key FROM reports WHERE kind = ${kind} AND key < ${key} ORDER BY key DESC LIMIT 1) AS prev,
-      (SELECT key FROM reports WHERE kind = ${kind} AND key > ${key} ORDER BY key ASC LIMIT 1) AS next`;
+    SELECT (SELECT key FROM reports WHERE space_id = ${publicationSpaceId()} AND kind = ${kind} AND key < ${key} ORDER BY key DESC LIMIT 1) AS prev,
+      (SELECT key FROM reports WHERE space_id = ${publicationSpaceId()} AND kind = ${kind} AND key > ${key} ORDER BY key ASC LIMIT 1) AS next`;
   return { prev: row?.prev ?? null, next: row?.next ?? null };
 }
 
 export async function loadReport(kind: ReportKind, key: string): Promise<ReportDetail | null> {
   // Its number counts every issue of the kind up to it, as the index numbers them (reportIndexRows).
   const [r] = await sql<(Pick<ReportRow, "content" | "generated_at"> & { issue_number: number })[]>`
-    SELECT r.content, r.generated_at, (SELECT count(*)::int FROM reports earlier WHERE earlier.kind = r.kind AND earlier.key <= r.key) AS issue_number
-    FROM reports r WHERE r.kind = ${kind} AND r.key = ${key}`;
+    SELECT r.content, r.generated_at, (SELECT count(*)::int FROM reports earlier WHERE earlier.space_id = r.space_id AND earlier.kind = r.kind AND earlier.key <= r.key) AS issue_number
+    FROM reports r WHERE r.space_id = ${publicationSpaceId()} AND r.kind = ${kind} AND r.key = ${key}`;
   if (!r) return null;
   const c = r.content;
   const entries: Array<Record<string, any>> = [
@@ -337,10 +364,11 @@ export async function loadReport(kind: ReportKind, key: string): Promise<ReportD
   const rawItems = [...entries, ...entries.flatMap((e) => e.related ?? [])];
   const avail = await availability([...new Set(rawItems.map((i) => i.itemId).filter(Boolean))]);
   const cite = (raw: Record<string, any>) => entryCitation(raw, avail);
+  const local = (raw: Record<string, any>) => belongsHere(raw, avail);
 
   const sections: ReportDetail["sections"] = kind === "daily"
-    ? (c.sections ?? []).map((s: any) => ({ label: String(s.label), summary: null, items: (s.items ?? []).map(cite) }))
-    : (c.themes ?? []).map((t: any) => ({ label: String(t.heading), summary: sectionSummary(t, avail), items: (t.storyRefs ?? []).map(cite) }));
+    ? (c.sections ?? []).map((s: any) => ({ label: String(s.label), summary: null, items: (s.items ?? []).filter(local).map(cite) }))
+    : (c.themes ?? []).map((t: any) => ({ label: String(t.heading), summary: sectionSummary(t, avail), items: (t.storyRefs ?? []).filter(local).map(cite) }));
   const all = sections.flatMap((s) => s.items);
   const highlightIds: string[] = c.highlights ?? [];
   const highlights = highlightIds.length
@@ -360,8 +388,8 @@ export async function loadReport(kind: ReportKind, key: string): Promise<ReportD
   const [{ prev, next }, picture] = await Promise.all([neighbors(kind, key), leadItem?.itemId && leadItem.available ? leadCover(leadItem.itemId) : null]);
   const cover = picture && leadItem ? { ...picture, caption: kind === "daily" || c.leadItemId ? null : leadItem.title } : null;
   const headline = kind === "daily" ? null : periodicHeadline(c);
-  const title = kind === "daily" ? `${withSubject("日报")} · ${key}`
-    : String((hasCitedLead && c.title === headline ? named?.title : c.title) ?? (kind === "weekly" ? `${SITE.name} 周报 · ${key}` : `${SITE.name} 月报 · ${key}`));
+  const title = kind === "daily" ? `${publicationSpaceId() === DEFAULT_SPACE_ID ? withSubject("日报") : `${reportSiteName()} 日报`} · ${key}`
+    : String((hasCitedLead && c.title === headline ? named?.title : c.title) ?? (kind === "weekly" ? `${reportSiteName()} 周报 · ${key}` : `${reportSiteName()} 月报 · ${key}`));
   return {
     kind,
     key,
@@ -376,7 +404,7 @@ export async function loadReport(kind: ReportKind, key: string): Promise<ReportD
     overview,
     highlights,
     sections,
-    flashes: (c.flashes ?? []).map(cite),
+    flashes: (c.flashes ?? []).filter(local).map(cite),
     cover,
     metrics: {
       ...c.metrics,
@@ -395,15 +423,16 @@ export async function loadReport(kind: ReportKind, key: string): Promise<ReportD
  * index cannot reintroduce a withdrawn headline into downstream caches.
  */
 const INDEX_LIMIT = 400;
-const indexes = new Map<ReportKind, Cached<{ rows: Awaited<ReturnType<typeof reportIndexRows>>; gone: Set<string> }>>();
+const indexes = new Map<string, Cached<{ rows: Awaited<ReturnType<typeof reportIndexRows>>; gone: Set<string> }>>();
 export function reportIndex(kind: ReportKind) {
-  let entry = indexes.get(kind);
+  const cacheKey = JSON.stringify([publicationCacheKey(), kind]);
+  let entry = indexes.get(cacheKey);
   if (!entry) {
     entry = cached(async () => {
       const rows = await reportIndexRows(kind, INDEX_LIMIT);
       return { rows, gone: await unavailableHeadlineIds(rows, kind === "daily" ? "daily" : "periodic") };
     }, { freshMs: 60_000, maxStaleMs: 60_000 });
-    indexes.set(kind, entry);
+    indexes.set(cacheKey, entry);
   }
   return entry.get();
 }
@@ -423,7 +452,8 @@ export async function listReports(kind: ReportKind, limit = INDEX_LIMIT): Promis
 
 // v1
 
-const attribution = (url: string) => ({ name: SITE.name, url });
+const reportSiteName = () => publicationConfig()?.siteName ?? SITE.name;
+const attribution = (url: string) => ({ name: reportSiteName(), url });
 
 export async function v1Dailies(limit: number) {
   const index = await reportIndex("daily");
@@ -458,8 +488,8 @@ export interface DailyNote {
 /** The v1 daily (its fields never change) and the notes the Agent answer adds to it. */
 export async function dailyWithNotes(date: string | "latest") {
   const [r] = date === "latest"
-    ? await sql<ReportRow[]>`SELECT kind, key, window_start, window_end, content, generated_at FROM reports WHERE kind = 'daily' ORDER BY key DESC LIMIT 1`
-    : await sql<ReportRow[]>`SELECT kind, key, window_start, window_end, content, generated_at FROM reports WHERE kind = 'daily' AND key = ${date}`;
+    ? await sql<ReportRow[]>`SELECT kind, key, window_start, window_end, content, generated_at FROM reports WHERE space_id = ${publicationSpaceId()} AND kind = 'daily' ORDER BY key DESC LIMIT 1`
+    : await sql<ReportRow[]>`SELECT kind, key, window_start, window_end, content, generated_at FROM reports WHERE space_id = ${publicationSpaceId()} AND kind = 'daily' AND key = ${date}`;
   if (!r) return null;
   const c = r.content;
   const raw = [...(c.sections ?? []).flatMap((s: any) => s.items ?? []), ...(c.flashes ?? [])];
@@ -533,7 +563,7 @@ export async function feedIssues(kind: ReportKind, limit: number): Promise<FeedI
           (SELECT coalesce(jsonb_agg(jsonb_build_object('itemId', i->'itemId', 'title', i->'title') ORDER BY ord), '[]'::jsonb)
            FROM jsonb_array_elements(coalesce(s->'items', '[]'::jsonb)) WITH ORDINALITY AS e(i, ord))) ORDER BY sord), '[]'::jsonb)
           FROM jsonb_array_elements(coalesce(content->'sections', '[]'::jsonb)) WITH ORDINALITY AS x(s, sord))) AS content
-      FROM reports WHERE kind = 'daily' ORDER BY key DESC LIMIT ${limit}`
+      FROM reports WHERE space_id = ${publicationSpaceId()} AND kind = 'daily' ORDER BY key DESC LIMIT ${limit}`
     : await sql<{ key: string; generated_at: Date; content: Record<string, any> }[]>`
       SELECT key, generated_at, jsonb_build_object(
         'headline', content->'headline', 'title', content->'title', 'overview', content->'overview',
@@ -542,7 +572,7 @@ export async function feedIssues(kind: ReportKind, limit: number): Promise<FeedI
           (SELECT coalesce(jsonb_agg(jsonb_build_object('itemId', i->'itemId', 'title', i->'title') ORDER BY ord), '[]'::jsonb)
            FROM jsonb_array_elements(coalesce(t->'storyRefs', '[]'::jsonb)) WITH ORDINALITY AS e(i, ord))) ORDER BY tord), '[]'::jsonb)
           FROM jsonb_array_elements(coalesce(content->'themes', '[]'::jsonb)) WITH ORDINALITY AS x(t, tord))) AS content
-      FROM reports WHERE kind = ${kind} ORDER BY key DESC LIMIT ${limit}`;
+      FROM reports WHERE space_id = ${publicationSpaceId()} AND kind = ${kind} ORDER BY key DESC LIMIT ${limit}`;
   const shape = kind === "daily" ? "daily" : "periodic";
   const gone = await unavailableIds(rows.flatMap((r) => entriesOf(r.content, shape).map((i) => i.itemId)));
   const leads = kind === "daily" ? await dailyLeads(rows, gone) : null;
@@ -601,8 +631,8 @@ export async function v1Periods(kind: PeriodKind, limit: number) {
  */
 export async function v1Period(kind: PeriodKind, key: string | "latest") {
   const [r] = key === "latest"
-    ? await sql<ReportRow[]>`SELECT kind, key, window_start, window_end, content, generated_at FROM reports WHERE kind = ${kind} ORDER BY key DESC LIMIT 1`
-    : await sql<ReportRow[]>`SELECT kind, key, window_start, window_end, content, generated_at FROM reports WHERE kind = ${kind} AND key = ${key}`;
+    ? await sql<ReportRow[]>`SELECT kind, key, window_start, window_end, content, generated_at FROM reports WHERE space_id = ${publicationSpaceId()} AND kind = ${kind} ORDER BY key DESC LIMIT 1`
+    : await sql<ReportRow[]>`SELECT kind, key, window_start, window_end, content, generated_at FROM reports WHERE space_id = ${publicationSpaceId()} AND kind = ${kind} AND key = ${key}`;
   if (!r) return null;
   const c = r.content;
   const raw: Array<Record<string, any>> = (c.themes ?? []).flatMap((t: any) => t.storyRefs ?? []);

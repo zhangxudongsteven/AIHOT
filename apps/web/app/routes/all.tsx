@@ -1,5 +1,8 @@
+import { useSpace } from "../lib/space";
+import { spacePath, spaceSlug, unscopedPath } from "../lib/space-path";
+import { nonDefaultSpace, withSpaceMeta } from "../lib/seo";
 import { useEffect } from "react";
-import { Link, redirect, useLoaderData, useNavigation, useSearchParams } from "react-router";
+import { Link, redirect, useLoaderData, useNavigation, useSearchParams } from "../lib/space-router";
 import type { Route } from "./+types/all";
 import type { PoolResponse } from "@aihot/contracts/site";
 import { SITE, subjectAfter } from "@aihot/site";
@@ -30,25 +33,27 @@ export async function loader({ request }: Route.LoaderArgs) {
   // Older deep-paging parameters (deep, anchorAt) still open a normal page.
   const page = Math.min(Math.max(Number.parseInt(url.searchParams.get("page") ?? "1", 10) || 1, 1), 50);
   const data = await loadOr404<PoolResponse>(
-    listPath("/api/site/pool", { ...filterParams(readFilters(url.searchParams)), q, tab, page: page > 1 ? page : null }),
+    listPath("/api/site/pool", { ...filterParams(readFilters(url.searchParams, null)), q, tab, page: page > 1 ? page : null }),
     // The busy page keeps the search, so it can be tried again as it was.
-    { signal: request.signal, busyRedirect: `/all/search-busy${url.search}` },
+    { request, signal: request.signal, busyRedirect: `/all/search-busy${url.search}` },
   );
   // Past the last page of what there is: the last page, with the same search and filters.
-  if (data.total > 0 && data.page > data.pageCount) throw redirect(pageHref(url.searchParams, data.pageCount));
+  if (data.total > 0 && data.page > data.pageCount) throw redirect(spacePath(pageHref(url.searchParams, data.pageCount), spaceSlug(url.pathname)));
   return cachedPage(60, { data });
 }
 
-export function meta({ loaderData }: Route.MetaArgs) {
+function routeMeta(args: Route.MetaArgs) {
+  const { loaderData } = args;
+  const space = nonDefaultSpace(args);
   const f = loaderData?.data.filters;
   const q = f?.q;
   const page = loaderData?.data.page ?? 1;
   const path = listPath("/all", { ...(f && filterParams(f)), q, tab: q && f?.tab === "relevance" ? "relevance" : null, page: page > 1 ? page : null });
-  const title = `${q ? `搜索：${q}` : ALL_TITLE}${page > 1 ? ` · 第 ${page} 页` : ""}`;
+  const title = `${q ? `搜索：${q}` : space ? "全部动态" : ALL_TITLE}${page > 1 ? ` · 第 ${page} 页` : ""}`;
   const noindex = !!q || hasFeedFilters(f);
   return pageMeta({
     title,
-    description: `${SITE.name} 收录的${subjectAfter("全部", "相关动态")}，可按频道、类别与标签筛选，支持中英文搜索。`,
+    description: `${space ? `${space.name}收录的全部相关动态` : `${SITE.name} 收录的${subjectAfter("全部", "相关动态")}`}，可按频道、类别与标签筛选，支持中英文搜索。`,
     path,
     noindex,
     jsonLd: noindex ? undefined : itemListLd(path, title, loaderData?.data.items.map((i) => i.title) ?? []),
@@ -67,11 +72,12 @@ function pageHref(params: URLSearchParams, page: number) {
 }
 
 export default function AllPage() {
+  const { slug, isDefault } = useSpace();
   const { data } = useLoaderData<typeof loader>();
   const [params] = useSearchParams();
   const navigation = useNavigation();
   const f = data.filters;
-  const busy = navigation.state === "loading" && navigation.location?.pathname === "/all";
+  const busy = navigation.state === "loading" && unscopedPath(navigation.location?.pathname ?? "") === "/all";
   const { channel, category } = filterParams(f);
   const keep = { channel, category };
   const searchTabHref = (tab: "time" | "relevance") => {
@@ -85,7 +91,7 @@ export default function AllPage() {
   const updated = beijingTime(data.freshness);
   // Searches are remembered in this browser for the phone search (listed in the privacy notice).
   useEffect(() => {
-    if (f.q) addRecentSearch(f.q);
+    if (f.q) addRecentSearch(f.q, slug);
   }, [f.q]);
   // Older phone links (/all?search=1) opened the search field; they open the search now.
   useEffect(() => {
@@ -112,7 +118,7 @@ export default function AllPage() {
 
       {/* Desktop, as on 精选: the title, then one filter row with the search field aligned on the right. */}
       <div className="hidden lg:block">
-        <h1 className="text-[24px] font-semibold leading-[1.3] text-ink">{title ?? ALL_TITLE}</h1>
+        <h1 className="text-[24px] font-semibold leading-[1.3] text-ink">{title ?? (isDefault ? ALL_TITLE : "全部动态")}</h1>
         <div className="mb-5 mt-4 flex items-center justify-between gap-4">
           <CategoryTabs base="/all" category={f.category} channel={f.channel} layoutId="all-cat-desk" className="min-w-0" />
           <SearchField defaultValue={f.q ?? ""} keep={keep} />
@@ -159,3 +165,5 @@ export default function AllPage() {
     </div>
   );
 }
+
+export const meta = withSpaceMeta(routeMeta);

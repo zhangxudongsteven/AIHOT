@@ -1,5 +1,9 @@
+import { spaceSlug } from "../lib/space-path";
+import { useSpaceFetch } from "../lib/space";
+import { useSpace } from "../lib/space";
+import { withSpaceMeta } from "../lib/seo";
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
-import { Await, isRouteErrorResponse, Link, useAsyncError, useLoaderData, useNavigate, useRevalidator, type ClientLoaderFunctionArgs } from "react-router";
+import { Await, isRouteErrorResponse, Link, useAsyncError, useLoaderData, useNavigate, useRevalidator, type ClientLoaderFunctionArgs } from "../lib/space-router";
 import type { Route } from "./+types/item";
 import type { FeedItemSummary, SiteItemDetail } from "@aihot/contracts/site";
 import { ITEM_COPY, SITE } from "@aihot/site";
@@ -34,7 +38,7 @@ export { pageHeaders as headers } from "../lib/api.server";
 const PosterSheet = lazy(() => import("../features/item/PosterSheet"));
 
 export async function loader({ params, request }: Route.LoaderArgs) {
-  const item = await loadOr404<SiteItemDetail>(`/api/site/items/${encodeURIComponent(params.id)}`, { signal: request.signal });
+  const item = await loadOr404<SiteItemDetail>(`/api/site/items/${encodeURIComponent(params.id)}`, { request, signal: request.signal });
   return cachedPage(600, { item });
 }
 
@@ -48,13 +52,13 @@ const reuse = pageReuse<typeof loader>();
 export const { shouldRevalidate } = reuse;
 export async function clientLoader(args: ClientLoaderFunctionArgs) {
   const { params } = args;
-  const preview = isPhone() && params.id ? takePreview(params.id) : null;
+  const preview = isPhone() && params.id ? takePreview(params.id, spaceSlug(new URL(args.request.url).pathname)) : null;
   if (!preview) return reuse.clientLoader(args);
   return { item: null, preview, detail: reuse.clientLoader(args) } satisfies Preview;
 }
 clientLoader.hydrate = true as const;
 
-export function meta({ loaderData }: Route.MetaArgs) {
+function routeMeta({ loaderData }: Route.MetaArgs) {
   if (!loaderData) return [{ title: titled("内容不存在") }, { name: "robots", content: "noindex" }];
   const { item } = loaderData;
   if (!item) return [{ title: titled(loaderData.preview.title) }];
@@ -153,8 +157,8 @@ function hostOf(url: string): string {
   }
 }
 
-async function shareOrCopy(item: Pick<SiteItemDetail, "id" | "title">): Promise<"shared" | "copied" | null> {
-  const url = `${siteUrl()}/items/${item.id}`;
+async function shareOrCopy(item: Pick<SiteItemDetail, "id" | "title">, path: string): Promise<"shared" | "copied" | null> {
+  const url = `${siteUrl()}${path}`;
   try {
     if (navigator.share && matchMedia("(pointer: coarse)").matches) {
       await navigator.share({ title: item.title, url });
@@ -201,6 +205,7 @@ export default function ItemPage() {
 
 /** Phones, while the article loads: what the card showed, in the article's own places. */
 function ItemPreview({ preview }: { preview: FeedItemSummary }) {
+  const { path: scopedPath, slug } = useSpace();
   const [toast, setToast] = useToast();
   const isX = preview.channel === "x" && !!preview.x;
   // Without a reliable date from the original, the card's time is when it was collected, and says so.
@@ -245,7 +250,7 @@ function ItemPreview({ preview }: { preview: FeedItemSummary }) {
         item={preview}
         originalLabel={isX ? "原推" : "原文"}
         onShare={async () => {
-          if ((await shareOrCopy(preview)) === "copied") setToast("链接已复制");
+          if ((await shareOrCopy(preview, scopedPath(`/items/${preview.id}`))) === "copied") setToast("链接已复制");
         }}
       />
       <Toast text={toast} />
@@ -275,7 +280,9 @@ function ItemGone() {
 }
 
 function ItemView({ item }: { item: SiteItemDetail }) {
+  const spaceFetch = useSpaceFetch();
   const navigate = useNavigate();
+  const { path: scopedPath, slug } = useSpace();
   const hasTranslation = item.hasTranslation;
   const lang = item.bodyLanguage;
   const [posterRequested, setPosterRequested] = useState(false);
@@ -283,19 +290,19 @@ function ItemView({ item }: { item: SiteItemDetail }) {
   const [outlineOpen, setOutlineOpen] = useState(false);
   const [actionsOpen, setActionsOpen] = useState(false);
   const [toast, setToast] = useToast();
-  useEffect(() => { markRead(item.id); }, [item.id]);
+  useEffect(() => { markRead(item.id, slug); }, [item.id]);
   const closePoster = useCallback(() => setPosterOpen(false), []);
   const openPoster = () => {
     setPosterRequested(true);
     setPosterOpen(true);
   };
   const share = async () => {
-    const r = await shareOrCopy(item);
+    const r = await shareOrCopy(item, scopedPath(`/items/${item.id}`));
     if (r === "copied") setToast("链接已复制");
   };
   const copyLink = async () => {
     try {
-      await copyText(`${siteUrl()}/items/${item.id}`);
+      await copyText(`${siteUrl()}${scopedPath(`/items/${item.id}`)}`);
       setToast("链接已复制");
     } catch {
       // clipboard unavailable
@@ -303,7 +310,7 @@ function ItemView({ item }: { item: SiteItemDetail }) {
   };
   const copyMarkdown = async () => {
     try {
-      const res = await fetch(`/items/${item.id}/markdown`);
+      const res = await spaceFetch(`/items/${item.id}/markdown`);
       if (!res.ok) throw new Error(String(res.status));
       await copyText(await res.text());
       setToast("Markdown 已复制");
@@ -345,7 +352,7 @@ function ItemView({ item }: { item: SiteItemDetail }) {
             (inWeChat() ? (
               <MenuItem icon={<IconDownload size={15} />} onSelect={() => { close(); void copyMarkdown(); }}>复制 Markdown</MenuItem>
             ) : (
-              <MenuItem icon={<IconDownload size={15} />} href={`/items/${item.id}/markdown`} download onSelect={close}>
+              <MenuItem icon={<IconDownload size={15} />} href={scopedPath(`/items/${item.id}/markdown`)} download onSelect={close}>
                 导出 Markdown
               </MenuItem>
             ))}
@@ -360,7 +367,7 @@ function ItemView({ item }: { item: SiteItemDetail }) {
     ...(item.markdownAvailable
       ? [inWeChat()
         ? { key: "markdown", label: "复制 Markdown", icon: <IconDownload size={20} />, onSelect: () => void copyMarkdown() }
-        : { key: "markdown", label: "导出 Markdown", icon: <IconDownload size={20} />, href: `/items/${item.id}/markdown`, download: true }]
+        : { key: "markdown", label: "导出 Markdown", icon: <IconDownload size={20} />, href: scopedPath(`/items/${item.id}/markdown`), download: true }]
       : []),
   ];
   // Desktop actions head the right rail, one row as tall as 返回 at the head of the left one.
@@ -615,3 +622,5 @@ function ItemView({ item }: { item: SiteItemDetail }) {
     </div>
   );
 }
+
+export const meta = withSpaceMeta(routeMeta);

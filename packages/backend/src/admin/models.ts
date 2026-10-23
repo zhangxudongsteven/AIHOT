@@ -4,10 +4,11 @@
 // new work only.
 import type { AdminModels, BeforeJson } from "@aihot/contracts/admin";
 import { sql } from "../db.ts";
-import { capabilities, capabilityAcceptsModel, fallbackModelFor, invalidateModelCache, modelSources } from "../editorial/models.ts";
+import { capabilities, capabilityAcceptsModel, fallbackModelFor, invalidateModelCache, modelSources, SPACE_MODEL_CAPABILITIES } from "../editorial/models.ts";
 import { MODELS } from "../providers/llm.ts";
 import { modelCircuits } from "../providers/circuit.ts";
 import { audit } from "../audit.ts";
+import { configForContext, DEFAULT_SPACE_ID, resolveSpaceContext, storeSpaceConfig } from "../spaces/context.ts";
 
 interface UsageRow {
   purpose: string;
@@ -32,8 +33,9 @@ interface UsageRow {
 
 export async function modelsOverview(days = 7): Promise<BeforeJson<AdminModels>> {
   const since = new Date(Date.now() - days * 86400_000);
+  const context = await resolveSpaceContext(DEFAULT_SPACE_ID);
   const [sources, circuits, usage, prices, history, benches] = await Promise.all([
-    modelSources(),
+    modelSources(undefined, context),
     modelCircuits(),
     sql<UsageRow[]>`
       SELECT r.purpose, a.model, r.request->>'promptVersion' AS prompt_version, count(*)::int AS calls,
@@ -72,9 +74,11 @@ export async function modelsOverview(days = 7): Promise<BeforeJson<AdminModels>>
     return { amount, currency: p.currency };
   };
   const steps = Object.entries(capabilities()).map(([key, c]) => {
-    const backup = fallbackModelFor(key, sources[key]!.model);
-    const primaryCircuit = circuits[MODELS[sources[key]!.model]!.service];
-    const backupCircuit = backup ? circuits[MODELS[backup]!.service] : undefined;
+    const scoped = SPACE_MODEL_CAPABILITIES.has(key) ? context : undefined;
+    const models = scoped ? configForContext(scoped).modelSpecs : MODELS;
+    const backup = fallbackModelFor(key, sources[key]!.model, scoped);
+    const primaryCircuit = circuits[models[sources[key]!.model]!.service];
+    const backupCircuit = backup ? circuits[models[backup]!.service] : undefined;
     return {
       key,
       label: c.label,
@@ -118,14 +122,31 @@ export async function switchModel(capability: string, model: string | null, reas
     if (!spec) throw Object.assign(new Error("unknown model"), { statusCode: 400 });
     if (!capabilityAcceptsModel(c, spec)) throw Object.assign(new Error("this capability needs a vision model"), { statusCode: 400 });
   }
-  const before = (await modelSources())[capability];
-  if (model === null) await sql`DELETE FROM settings WHERE key = ${`models.${capability}`}`;
-  else {
-    await sql`INSERT INTO settings (key, value, updated_by) VALUES (${`models.${capability}`}, ${sql.json({ model })}, ${actor})
-              ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, updated_at = now()`;
-  }
+  const result = await sql.begin(async tx => {
+    // Share the CLI's lock: concurrent switches must build on the version that just committed.
+    await tx`SELECT pg_advisory_xact_lock(hashtext(${"space-config:" + DEFAULT_SPACE_ID}))`;
+    const context = SPACE_MODEL_CAPABILITIES.has(capability) ? await resolveSpaceContext(DEFAULT_SPACE_ID, undefined, tx) : undefined;
+    const before = (await modelSources(tx, context))[capability];
+    if (model === null) await tx`DELETE FROM settings WHERE key = ${`models.${capability}`}`;
+    else {
+      await tx`INSERT INTO settings (key, value, updated_by) VALUES (${`models.${capability}`}, ${tx.json({ model })}, ${actor})
+                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, updated_at = now()`;
+    }
+    const after = (await modelSources(tx))[capability]!;
+    let nextVersion: string | undefined;
+    if (context) {
+      const current = configForContext(context);
+      const { key: _key, ...spec } = MODELS[after.model]!;
+      const next = await storeSpaceConfig(DEFAULT_SPACE_ID, { ...current, models: { ...current.models, [capability]: after.model },
+        modelSpecs: { ...current.modelSpecs, [after.model]: spec } }, tx);
+      nextVersion = next.configVersion;
+      await tx`UPDATE spaces SET active_config_version = ${nextVersion} WHERE id = ${DEFAULT_SPACE_ID}`;
+    }
+    await audit(actor, "models.switch", `capability:${capability}`, reason,
+      context ? { ...before, configVersion: context.configVersion } : before ?? null,
+      context ? { ...after, configVersion: nextVersion } : after, { db: tx });
+    return { capability, before, after };
+  });
   invalidateModelCache();
-  const after = (await modelSources())[capability];
-  await audit(actor, "models.switch", `capability:${capability}`, reason, before ?? null, after ?? null);
-  return { capability, before, after };
+  return result;
 }

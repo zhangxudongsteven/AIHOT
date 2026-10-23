@@ -10,6 +10,8 @@ import { stopBoss } from "@aihot/backend/jobs/queue";
 import { republishKey } from "@aihot/backend/jobs/publication";
 import { followXRenames } from "@aihot/backend/sources/x-renames";
 import { ProviderRejectedError } from "@aihot/backend/providers/receipts";
+import { defaultSpaceConfig, storeSpaceConfig } from "@aihot/backend/spaces/context";
+import { cutoverSpaceIdentity } from "../scripts/space-cutover.ts";
 
 const DAY = 86400_000;
 const PRIVATE_MESSAGE = "Forbidden: Requested resource cannot be viewed due to user's privacy settings";
@@ -174,4 +176,39 @@ test("other permission refusals and provider failures still fail the rename chec
         (error: unknown) => error instanceof ProviderRejectedError && error.status === failure.status);
     }
   } finally { privateResponse = { status: 403, message: PRIVATE_MESSAGE }; }
+});
+
+test("renamed accounts keep independent source state and provider receipts across channels", async () => {
+  await sql`DELETE FROM articles WHERE source_id LIKE 'test-xr-%'`;
+  await sql`DELETE FROM sources WHERE id LIKE 'test-xr-%'`;
+  const T = tag();
+  const spaceId = `rename-space-${T}`;
+  await sql`INSERT INTO spaces (id, slug) VALUES (${spaceId}, ${spaceId})`;
+  const context = await storeSpaceConfig(spaceId, defaultSpaceConfig());
+  await sql`UPDATE spaces SET active_config_version = ${context.configVersion} WHERE id = ${spaceId}`;
+  await cutoverSpaceIdentity(sql);
+  const from = `old${T}`.slice(0, 15);
+  const to = `new${T}`.slice(0, 15);
+  const tweetId = String((BigInt(Date.now() - 3 * DAY - 1288834974657) << 22n) + 999n);
+  const at = new Date(Date.now() - 3 * DAY);
+  authors.set(tweetId, to);
+  const ids = [`test-xr-default-${T}`, `test-xr-second-${T}`];
+  for (const [index, sourceId] of ids.entries()) {
+    const owner = index === 0 ? 'default' : spaceId;
+    await sql`INSERT INTO sources (id, space_id, name, kind, config, tier, participation_mode, cursor, next_fetch_at)
+      VALUES (${sourceId}, ${owner}, ${`X @${from}`}, 'x_search', ${sql.json({ query: `from:${from} keyword${index}` })}, 'T1_5', 'editorial',
+        ${sql.json({ initializedAt: at.toISOString(), lastTweetId: tweetId })}, '2100-01-01')`;
+    await sql`INSERT INTO articles (id, space_id, source_id, identity_key, url, title, published_at, discovered_at, timeline_at, x_post)
+      VALUES (${`rename-${index}-${T}`}, ${owner}, ${sourceId}, ${`x:${tweetId}`}, ${`https://x.com/${from}/status/${tweetId}`}, 'Old post', ${at}, ${at}, ${at},
+        ${sql.json({ tweetId, handle: from, authorName: from, text: 'Old post' })})`;
+  }
+  const result = await followXRenames({ pauseMs: 0 });
+  assert.deepEqual(result.renamed.map(r => r.sourceId).sort(), [...ids].sort());
+  const sources = await sql<{ id: string; query: string }[]>`SELECT id, config->>'query' AS query FROM sources WHERE id = ANY(${ids}::text[])`;
+  for (const [index, sourceId] of ids.entries()) assert.equal(sources.find(s => s.id === sourceId)?.query, `from:${to} keyword${index}`);
+  const receipts = await sql<{ space_id: string; config_version: string; subject: string }[]>`
+    SELECT space_id, config_version, subject FROM receipts WHERE purpose = 'x_rename_check' AND subject = ANY(${ids.map(id => `source:${id}`)}::text[])`;
+  assert.equal(receipts.length, 2);
+  assert.equal(receipts.find(r => r.subject === `source:${ids[0]}`)?.space_id, 'default');
+  assert.deepEqual(receipts.find(r => r.subject === `source:${ids[1]}`), { space_id: spaceId, config_version: context.configVersion, subject: `source:${ids[1]}` });
 });

@@ -32,9 +32,9 @@ async function article(selected = false) {
 
 test("releasing an unknown receipt of an analysis step puts the article back", async () => {
   const id = await article();
-  await sql`UPDATE articles SET processing_state = 'failed', processing_error = 'receipt outcome unknown' WHERE id = ${id}`;
   const [r] = await sql<{ id: number }[]>`
     INSERT INTO receipts (logical_key, service, purpose, subject, status) VALUES (${`test-${T}`}, 'glm', 'score_article', ${`article:${id}@1`}, 'unknown') RETURNING id`;
+  await sql`UPDATE articles SET processing_state = 'failed', processing_error = ${`receipt ${r!.id} outcome unknown`} WHERE id = ${id}`;
   const out = await releaseReceipt(r!.id, { billed: false, note: "checked" }, "test");
   assert.equal(out?.requeued, true);
   const [a] = await sql<{ processing_state: string }[]>`SELECT processing_state FROM articles WHERE id = ${id}`;

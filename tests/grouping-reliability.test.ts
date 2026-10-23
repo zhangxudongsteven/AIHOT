@@ -16,6 +16,7 @@ import { settleNonEditorial } from "@aihot/backend/jobs/content";
 import { sweepUngrouped } from "@aihot/backend/jobs/events";
 import { enqueue, getBoss, QUEUES, stopBoss } from "@aihot/backend/jobs/queue";
 import { recoverStaleWork, releaseReceipt } from "@aihot/backend/operations/recover";
+import { defaultSpaceConfig, storeSpaceConfig, resolveSpaceContext } from "@aihot/backend/spaces/context";
 import { publishArticle } from "@aihot/backend/publication/publish";
 
 const T = tag();
@@ -55,6 +56,12 @@ async function post(suffix: string, history = false) {
 }
 
 before(async () => {
+  const base = defaultSpaceConfig({ group: "deepseek-flash" });
+  const { key: _primary, ...primary } = MODELS["test-group-primary"]!;
+  const { key: _backup, ...backup } = MODELS["test-group-backup"]!;
+  const context = await storeSpaceConfig("default", { ...base, models: { ...base.models, group: "test-group-primary" },
+    modelSpecs: { ...base.modelSpecs, "test-group-primary": primary, "test-group-backup": backup } });
+  await sql`UPDATE spaces SET active_config_version = ${context.configVersion} WHERE id = 'default'`;
   await sql`INSERT INTO sources (id,name,kind,tier,participation_mode,next_fetch_at) VALUES (${sourceId},'Group reliability','rss','T1','editorial','2100-01-01'),
     (${signalSource},'Group reliability signal','rss','T2','hot_signal','2100-01-01')`;
   const id = await report("root");
@@ -182,7 +189,7 @@ test("primary timeout continues through the backup; two timeouts wait for releas
   await releaseReceipt(Number(failed!.grouping_receipt_id), { billed: false, note: "local fixture verified" }, "test");
   await recoverStaleWork();
   const jobs = await boss.fetch(QUEUES.group);
-  assert.deepEqual(jobs.map((job) => [job.id, job.data]), [[jobId, data]]);
+  assert.deepEqual(jobs.map((job) => [job.id, job.data]), [[jobId, { ...data, context: await resolveSpaceContext("default"), generation: 0, inputRevision: 1, groupingGeneration: 0 }]]);
   assert.equal((await groupArticle(id)).verdict, "same-fact");
   await boss.complete(QUEUES.group, jobs[0]!.id);
   await sweepUngrouped();
@@ -235,7 +242,7 @@ for (const [cause, during] of Object.entries(waits)) for (const material of ["re
     const boss = await getBoss();
     await queuedMinuteAgo();
     const jobs = await boss.fetch(QUEUES.group);
-    assert.deepEqual(jobs.map(job => job.data), [signalOnly ? { articleId: id, signalOnly } : { articleId: id }]);
+    assert.deepEqual(jobs.map(job => job.data), [{ articleId: id, ...(signalOnly ? { signalOnly } : {}), context: await resolveSpaceContext("default"), generation: 0, inputRevision: 1, groupingGeneration: 0 }]);
     const { verdict } = await groupArticle(id, { signalOnly });
     if (!signalOnly) assert.equal(verdict, "same-fact");
     await boss.complete(QUEUES.group, jobs[0]!.id);

@@ -4,6 +4,13 @@
 // rule in SQL, and grouping takes the composite rule from here too. What a publication holds is
 // derived once, at publish time, by publish.ts and rules.ts.
 import { sql } from "../db.ts";
+import { publicationSpaceId } from "./context.ts";
+import { DEFAULT_SPACE_ID } from "../spaces/context.ts";
+
+/** Request-local scope; callers outside public requests retain the default channel. */
+export function spaceCondition(spaceId = publicationSpaceId()) {
+  return sql`p.space_id = ${spaceId}`;
+}
 import { independentSelectedSources } from './rules.ts';
 
 /** These reports share their fact's display slot; independent sources keep their own selected card. */
@@ -20,26 +27,26 @@ export function releasedCondition(now: Date) {
 }
 
 /** Listed on public surfaces at `now`: public, pool eligible, and released by then. */
-export function listedCondition(now: Date) {
-  return sql`p.visibility = 'public' AND p.eligible AND ${releasedCondition(now)}`;
+export function listedCondition(now: Date, spaceId = publicationSpaceId()) {
+  return sql`${spaceCondition(spaceId)} AND p.visibility = 'public' AND p.eligible AND ${releasedCondition(now)}`;
 }
 
 /** Story reports include older editorial material outside the pool, but never withdrawn or not yet released content. */
-export function storyReportCondition(now: Date) {
-  return sql`p.visibility = 'public' AND s.participation_mode = 'editorial' AND ${releasedCondition(now)}`;
+export function storyReportCondition(now: Date, spaceId = publicationSpaceId()) {
+  return sql`${spaceCondition(spaceId)} AND p.visibility = 'public' AND s.participation_mode = 'editorial' AND ${releasedCondition(now)}`;
 }
 
 /** Selected set as the website shows it (home timeline, reading groups, topics): every selected report. */
-export function selectedCondition(now: Date) {
-  return sql`p.visibility = 'public' AND p.selected AND p.visible_after <= ${now}`;
+export function selectedCondition(now: Date, spaceId = publicationSpaceId()) {
+  return sql`${spaceCondition(spaceId)} AND p.visibility = 'public' AND p.selected AND p.visible_after <= ${now}`;
 }
 
 /**
  * The selected set as machines receive it (v1, RSS, the sync ledger): the representative of ordinary
  * reports of each fact, plus any independently displayed selected articles (publish.ts settleSeats).
  */
-export function seatedCondition(now: Date) {
-  return sql`p.visibility = 'public' AND p.selected AND p.seat AND p.visible_after <= ${now}`;
+export function seatedCondition(now: Date, spaceId = publicationSpaceId()) {
+  return sql`${spaceCondition(spaceId)} AND p.visibility = 'public' AND p.selected AND p.seat AND p.visible_after <= ${now}`;
 }
 
 /** The report was published from a composite (multi-topic) analysis: it only mentions facts. */
@@ -56,6 +63,10 @@ export function compositeCondition() {
 export function latestCompositeCondition(article: ReturnType<typeof sql>) {
   return sql`(SELECT scope_analysis.output->>'scope' = 'composite' FROM analyses scope_analysis
     WHERE scope_analysis.article_id = ${article}
+      AND EXISTS (SELECT 1 FROM articles scope_input WHERE scope_input.id = scope_analysis.article_id
+        AND scope_input.processing_generation = scope_analysis.processing_generation
+        AND (scope_input.processing_config_version IS NULL OR scope_input.processing_config_version = scope_analysis.config_version
+          OR (scope_input.space_id = ${DEFAULT_SPACE_ID} AND scope_analysis.config_version IS NULL AND scope_analysis.processing_generation = 0)))
     ORDER BY scope_analysis.input_revision DESC, scope_analysis.id DESC LIMIT 1) IS TRUE`;
 }
 
@@ -64,8 +75,8 @@ export function latestCompositeCondition(article: ReturnType<typeof sql>) {
  * A summary-only report or one awaiting publication keeps its existing eligibility.
  * Historical memberships and judgements are retained independently of this predicate.
  */
-export function groupingEvidenceCondition(article: ReturnType<typeof sql>) {
-  return sql`NOT ${latestCompositeCondition(article)} AND NOT EXISTS (
+export function groupingEvidenceCondition(article: ReturnType<typeof sql>, spaceId = publicationSpaceId()) {
+  return sql`EXISTS (SELECT 1 FROM articles scope_article WHERE scope_article.id = ${article} AND scope_article.space_id = ${spaceId}) AND NOT ${latestCompositeCondition(article)} AND NOT EXISTS (
     SELECT 1 FROM publications grouping_publication
     WHERE grouping_publication.article_id = ${article} AND grouping_publication.visibility = 'withdrawn')`;
 }

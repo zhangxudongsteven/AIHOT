@@ -1,10 +1,13 @@
+import { useSpaceFetch } from "../lib/space";
+import { useSpace } from "../lib/space";
+import { withSpaceMeta } from "../lib/seo";
 import { useEffect, useRef, useState } from "react";
-import { Link, useSearchParams } from "react-router";
+import { Link, useSearchParams } from "../lib/space-router";
 import { SITE } from "@aihot/site";
 import { Presence } from "../components/ui/Presence";
 import { edgeTtl } from "../lib/api.server";
 import { pageMeta } from "../lib/seo";
-import { KEYS, lastPage, readJson, writeRaw } from "../lib/local-state";
+import { KEYS, lastPage, readJson, writeRaw, scopedStorageKey } from "../lib/local-state";
 import { IconCheck, IconClose, IconImage } from "../components/icons";
 import { RingMark } from "@aihot/site/brand/Logo.tsx";
 import { AsideCard, ReadingLayout } from "../components/ui/Page";
@@ -18,7 +21,7 @@ export function headers() {
   return edgeTtl(300);
 }
 
-export function meta() {
+function routeMeta() {
   return pageMeta({ title: "反馈", description: `告诉 ${SITE.name} 哪里可以做得更好：内容、功能、接入或来源方的更正与下架请求。`, path: "/feedback", image: "/og/pages/feedback.png", noindex: true });
 }
 
@@ -37,17 +40,17 @@ function parseDraft(value: unknown): Draft | null {
 /** Drafts the site's modules keep elsewhere in this browser. */
 const otherDrafts = () => webModules().flatMap((m) => (m.feedbackDraft ? [m.feedbackDraft] : []));
 
-function readDraft(): Draft | null {
-  let draft = parseDraft(readJson(KEYS.feedbackDraft));
-  for (const other of otherDrafts()) draft ??= parseDraft(other.read());
+function readDraft(key: string): Draft | null {
+  let draft = parseDraft(readJson(key));
+  for (const other of key === KEYS.feedbackDraft ? otherDrafts() : []) draft ??= parseDraft(other.read());
   return draft;
 }
 
 /** Saves the draft in this browser, or clears it (null); false when the browser refused. */
-function writeDraft(d: Draft | null): boolean {
-  const saved = writeRaw(KEYS.feedbackDraft, d && JSON.stringify({ ...d, savedAt: new Date().toISOString() }));
+function writeDraft(d: Draft | null, key: string): boolean {
+  const saved = writeRaw(key, d && JSON.stringify({ ...d, savedAt: new Date().toISOString() }));
   // Another draft is kept until this one is saved; a submitted draft clears them all.
-  if (saved || d === null) for (const other of otherDrafts()) other.clear();
+  if (key === KEYS.feedbackDraft && (saved || d === null)) for (const other of otherDrafts()) other.clear();
   return saved;
 }
 
@@ -91,6 +94,9 @@ const MAX_IMAGE = 5 * 1024 * 1024;
 const MAX_TEXT = 2000;
 
 export default function FeedbackPage() {
+  const spaceFetch = useSpaceFetch();
+  const { slug } = useSpace();
+  const draftKey = scopedStorageKey(KEYS.feedbackDraft, slug);
   const [params] = useSearchParams();
   const [draft, setDraft] = useState<Draft>({ content: "", email: "", pageUrl: params.get("from") ?? "" });
   const [shot, setShot] = useState<{ file: File; url: string } | null>(null);
@@ -99,7 +105,7 @@ export default function FeedbackPage() {
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    const saved = readDraft();
+    const saved = readDraft(draftKey);
     // The page the reader was on before coming here (tracked across in-site navigation, "更多" skipped);
     // a document the browser opened fresh falls back to its referrer.
     const before = params.get("from") ? null : (lastPage() ?? (document.referrer.startsWith(location.origin) ? document.referrer : null));
@@ -108,7 +114,7 @@ export default function FeedbackPage() {
     else if (from) setDraft((d) => ({ ...d, pageUrl: from }));
   }, []);
   useEffect(() => {
-    const t = setTimeout(() => writeDraft(draft.content || draft.email ? draft : null), 400);
+    const t = setTimeout(() => writeDraft(draft.content || draft.email ? draft : null, draftKey), 400);
     return () => clearTimeout(t);
   }, [draft]);
 
@@ -146,10 +152,10 @@ export default function FeedbackPage() {
       form.set("email", draft.email);
       form.set("pageUrl", draft.pageUrl);
       if (shot) form.set("screenshot", shot.file);
-      const res = await fetch("/api/site/feedback", { method: "POST", body: form });
+      const res = await spaceFetch("/api/site/feedback", { method: "POST", body: form });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) return setState({ kind: "error", message: body.detail ?? "提交失败，请稍后再试。" });
-      writeDraft(null);
+      writeDraft(null, draftKey);
       setState({ kind: "done", id: body.id });
       setDraft({ content: "", email: "", pageUrl: "" });
       setShot(null);
@@ -296,3 +302,5 @@ export default function FeedbackPage() {
     </>
   );
 }
+
+export const meta = withSpaceMeta(routeMeta);

@@ -1,6 +1,8 @@
 // Selected-item pushes to the content groups. One card per new fact: a short same-title lease holds
 // back concurrent duplicates until grouping settles the fact, and the fact (or the article when it
 // has none) is the dedupe identity per target. Old, backfilled or silenced items are never pushed.
+import { DEFAULT_SPACE_ID, type SpaceContext } from "../spaces/context.ts";
+import { notificationContext } from "./context.ts";
 import { sql } from "../db.ts";
 import { sha256 } from "../lib/ids.ts";
 import { deliverContent } from "./deliver.ts";
@@ -16,26 +18,29 @@ function normalizedTitle(t: string) {
   return t.toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, "");
 }
 
-export async function pushSelected(articleId: string, now = new Date()): Promise<PushOutcome> {
-  const content = await selectedContent(articleId, now);
+export async function pushSelected(articleId: string, now = new Date(), context?: SpaceContext): Promise<PushOutcome> {
+  context = await notificationContext(context);
+  const content = await selectedContent(articleId, now, context);
   if (content.status !== "ready") return content;
   const r = content.article;
 
   // Same-title lease: a concurrent report with the same headline waits for grouping.
-  const leaseKey = `selected-title:${sha256(normalizedTitle(r.title)).slice(0, 24)}`;
+  const leaseKey = `${context.spaceId === DEFAULT_SPACE_ID ? "" : `space:${context.spaceId}:`}selected-title:${sha256(normalizedTitle(r.title)).slice(0, 24)}`;
   const [lease] = await sql<{ holder: string }[]>`
-    INSERT INTO delivery_leases (lease_key, holder, expires_at) VALUES (${leaseKey}, ${articleId}, ${new Date(now.getTime() + LEASE_MS)})
+    INSERT INTO delivery_leases (space_id, lease_key, holder, expires_at) VALUES (${context.spaceId}, ${leaseKey}, ${articleId}, ${new Date(now.getTime() + LEASE_MS)})
     ON CONFLICT (lease_key) DO UPDATE SET holder = CASE WHEN delivery_leases.expires_at < ${now} THEN EXCLUDED.holder ELSE delivery_leases.holder END,
       expires_at = CASE WHEN delivery_leases.expires_at < ${now} THEN EXCLUDED.expires_at ELSE delivery_leases.expires_at END
+    WHERE delivery_leases.space_id = ${context.spaceId}
     RETURNING holder`;
-  if (lease && lease.holder !== articleId && !r.fact_id) return { status: "retry", after: new Date(now.getTime() + 2 * 60_000), reason: "same title in flight" };
+  if (!lease) throw new Error("Selected title lease belongs to a different space");
+  if (lease.holder !== articleId && !r.fact_id) return { status: "retry", after: new Date(now.getTime() + 2 * 60_000), reason: "same title in flight" };
 
   const dedupeKey = r.fact_id ? `selected:fact:${r.fact_id}` : `selected:article:${articleId}`;
   // Reports grouped into this fact after one of them was sent under an earlier fact still count as sent:
   // a sent or uncertain sibling among the current members stops the push.
   const siblings = r.fact_id
-    ? (await sql<{ article_id: string }[]>`SELECT article_id FROM fact_articles WHERE fact_id = ${r.fact_id} AND article_id <> ${articleId}`).map((x) => x.article_id)
+    ? (await sql<{ article_id: string }[]>`SELECT article_id FROM fact_articles WHERE space_id = ${context.spaceId} AND fact_id = ${r.fact_id} AND article_id <> ${articleId}`).map((x) => x.article_id)
     : [];
-  const targets = await deliverContent({ subjectKind: "selected", subjectId: articleId, dedupeKey, contentAt: r.discovered_at, card: content.card, siblings });
+  const targets = await deliverContent({ subjectKind: "selected", subjectId: articleId, dedupeKey, contentAt: r.discovered_at, card: content.card, siblings }, context);
   return { status: targets.some((t) => t.status === "sent") ? "pushed" : "skipped", targets, reason: targets.length ? undefined : "no new target" };
 }

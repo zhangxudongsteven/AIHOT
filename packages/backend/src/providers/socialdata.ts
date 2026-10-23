@@ -1,4 +1,5 @@
 // SocialData (X search). Paid per request: every call goes through receipts and the budget.
+import type { SpaceContext } from "../spaces/context.ts";
 import { credential } from "../config.ts";
 import { guardedFetch } from "../lib/http-fetch.ts";
 import { assertAccepted, paidRequest, ProviderRejectedError, type CallOutcome, type ReceiptRequest, type ReceiptResult } from "./receipts.ts";
@@ -86,12 +87,12 @@ const LOOKUP = { timeoutMs: 30_000, maxBytes: 4 * 1024 * 1024 };
  * Searches recent tweets. `window` makes the receipt identity time-bucketed so a retry in the same
  * bucket reuses the stored response instead of paying again.
  */
-export async function searchTweets(query: string, opts: { purpose: string; subject: string; window: string; type?: "Latest" | "Top"; cursor?: string | null }): Promise<SearchResult> {
+export async function searchTweets(query: string, opts: { context?: SpaceContext; purpose: string; subject: string; window: string; type?: "Latest" | "Top"; cursor?: string | null }): Promise<SearchResult> {
   const type = opts.type ?? "Latest";
   const sp = new URLSearchParams({ query, type });
   if (opts.cursor) sp.set("cursor", opts.cursor);
   const receipt = await get<{ tweets?: SdTweet[] }>(`/twitter/search?${sp}`,
-    { purpose: opts.purpose, subject: opts.subject, identity: { query, type, cursor: opts.cursor ?? null, window: opts.window }, requestSummary: { query, type } },
+    { context: opts.context, purpose: opts.purpose, subject: opts.subject, identity: { query, type, cursor: opts.cursor ?? null, window: opts.window }, requestSummary: { query, type } },
     {
       // Deeper pages of a search over two dozen accounts can take well over 20 seconds.
       timeoutMs: 60_000,
@@ -140,9 +141,9 @@ export interface SdArticle {
  * The long-form article a post published, looked up by the id of that post (the number in an
  * `x.com/i/article/<id>` link is not it). Null when the post published none. Paid per article.
  */
-export async function getArticle(tweetId: string, opts: { purpose: string; subject: string }): Promise<SdArticle | null> {
+export async function getArticle(tweetId: string, opts: { context?: SpaceContext; purpose: string; subject: string }): Promise<SdArticle | null> {
   const receipt = await get<{ article?: SdArticle; status?: string }>(`/twitter/article/${encodeURIComponent(tweetId)}`,
-    { purpose: opts.purpose, subject: opts.subject, identity: { article: tweetId }, requestSummary: { article: tweetId } },
+    { context: opts.context, purpose: opts.purpose, subject: opts.subject, identity: { article: tweetId }, requestSummary: { article: tweetId } },
     {
       ...LOOKUP,
       missing: { articles: 0 },
@@ -165,9 +166,9 @@ export function privateAccountRefusal(error: unknown): boolean {
  * One tweet by id (context for replies and quotes, or who wrote it now). Paid; the receipt makes retries
  * free. A `window` asks again in each window instead of reusing the first answer.
  */
-export async function getTweet(id: string, opts: { purpose: string; subject: string; window?: string }): Promise<SdTweet | null> {
+export async function getTweet(id: string, opts: { context?: SpaceContext; purpose: string; subject: string; window?: string }): Promise<SdTweet | null> {
   const receipt = await get<SdTweet>(`/twitter/tweets/${encodeURIComponent(id)}`,
-    { purpose: opts.purpose, subject: opts.subject, identity: opts.window ? { tweet: id, window: opts.window } : { tweet: id }, requestSummary: { tweet: id } },
+    { context: opts.context, purpose: opts.purpose, subject: opts.subject, identity: opts.window ? { tweet: id, window: opts.window } : { tweet: id }, requestSummary: { tweet: id } },
     { ...LOOKUP, missing: { tweets: 0 }, settle: (json) => ({ response: json, usage: { tweets: 1 }, cost: objectsCost(1) }) });
   return (receipt.response as SdTweet | null) ?? null;
 }

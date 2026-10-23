@@ -9,6 +9,7 @@ import { sanitizeBody } from "../content/sanitize.ts";
 import { identityKeyForUrl } from "../lib/url.ts";
 import { dajialaConfigured, mpArticle, mpHistory, type MpArticle } from "../providers/dajiala.ts";
 import { failureKind } from "../providers/receipts.ts";
+import { DEFAULT_SPACE_ID, resolveSpaceContext, type SpaceContext } from "../spaces/context.ts";
 
 const MAX_NEW_PER_CHECK = 8;
 /** Posts older than this on the first check of an account are history, not news. */
@@ -18,9 +19,9 @@ const BODY_RETRIES = 3;
 const BODY_RETRY_WINDOW_MS = 3 * 86400_000;
 
 /** The article body, and when it is missing for a reason that may pass (rate limit, server error, lost answer), that reason. */
-async function fetchBody(url: string, sourceId: string, identity: string): Promise<{ body: MpArticle | null; passing: string | null }> {
+async function fetchBody(url: string, sourceId: string, identity: string, context: SpaceContext): Promise<{ body: MpArticle | null; passing: string | null }> {
   try {
-    return { body: await mpArticle(url, { subject: sourceId, identity }), passing: null };
+    return { body: await mpArticle(url, { subject: sourceId, identity, context }), passing: null };
   } catch (error) {
     const kind = failureKind(error);
     if (kind === "budget") throw error;
@@ -30,6 +31,7 @@ async function fetchBody(url: string, sourceId: string, identity: string): Promi
 
 interface MpSource {
   id: string;
+  space_id: string;
   name: string;
   config: { wxid?: string; ghid?: string; nickname?: string };
   cursor: Record<string, unknown> | null;
@@ -37,19 +39,20 @@ interface MpSource {
   participation_mode: string;
 }
 
-export async function checkMpAccount(sourceId: string, reason: "schedule" | "manual") {
-  const [source] = await sql<MpSource[]>`SELECT id, name, config, cursor, enabled, participation_mode FROM sources WHERE id = ${sourceId} AND kind = 'mp_account'`;
+export async function checkMpAccount(sourceId: string, reason: "schedule" | "manual", suppliedContext?: SpaceContext) {
+  const context = await resolveSpaceContext(suppliedContext?.spaceId ?? DEFAULT_SPACE_ID, suppliedContext?.configVersion);
+  const [source] = await sql<MpSource[]>`SELECT id, space_id, name, config, cursor, enabled, participation_mode FROM sources WHERE space_id = ${context.spaceId} AND id = ${sourceId} AND kind = 'mp_account'`;
   if (!source) return { sourceId, status: "missing" as const };
   if (!source.enabled && reason !== "manual") return { sourceId, status: "paused" as const };
   const ghid = source.config.ghid ?? source.config.wxid;
   if (!ghid) return { sourceId, status: "unconfigured" as const };
-  const [run] = await sql<{ id: number }[]>`INSERT INTO fetch_runs (source_id, detail) VALUES (${sourceId}, ${sql.json({ reason })}) RETURNING id`;
+  const [run] = await sql<{ id: number }[]>`INSERT INTO fetch_runs (space_id, source_id, detail) VALUES (${context.spaceId}, ${sourceId}, ${sql.json({ reason })}) RETURNING id`;
   const firstCheck = !source.cursor?.lastCheckedAt;
   let created = 0;
   try {
     // One paid list call per account per 10-minute window, whoever asks.
     const window = `${reason === "schedule" ? "s" : "m"}:${Math.floor(Date.now() / 600_000)}`;
-    const history = await mpHistory(ghid, { subject: sourceId, window });
+    const history = await mpHistory(ghid, { subject: sourceId, window, context });
     const posts = [...history.posts].sort((a, b) => b.post_time - a.post_time);
     let fetched = 0;
     for (const p of posts) {
@@ -61,13 +64,13 @@ export async function checkMpAccount(sourceId: string, reason: "schedule" | "man
       const key = identityKeyForUrl(p.url);
       const [known] = key
         ? await sql<{ id: string; body_status: string; discovered_at: Date; retry: { attempts: number } | null }[]>`
-            SELECT id, body_status, discovered_at, raw->'dajiala'->'bodyRetry' AS retry FROM articles WHERE identity_key = ${key} LIMIT 1`
+            SELECT id, body_status, discovered_at, raw->'dajiala'->'bodyRetry' AS retry FROM articles WHERE space_id = ${context.spaceId} AND identity_key = ${key} LIMIT 1`
         : [];
       const retryBody = !!known?.retry && known.body_status === "none" && known.retry.attempts < BODY_RETRIES && Date.now() - known.discovered_at.getTime() < BODY_RETRY_WINDOW_MS;
       if (known && !retryBody) continue;
       fetched += 1;
       // Without a body the post is listed anyway; analysis works from title and digest.
-      const { body, passing } = await fetchBody(p.url, sourceId, p.sn ?? p.url);
+      const { body, passing } = await fetchBody(p.url, sourceId, p.sn ?? p.url, context);
       if (known && !body?.content) {
         const retry = passing ? sql`jsonb_set(raw, '{dajiala,bodyRetry}', ${sql.json({ attempts: known.retry!.attempts + 1, error: passing })})` : sql`raw #- '{dajiala,bodyRetry}'`;
         await sql`UPDATE articles SET raw = ${retry} WHERE id = ${known.id}`;
@@ -95,11 +98,11 @@ export async function checkMpAccount(sourceId: string, reason: "schedule" | "man
             ...(passing ? { bodyRetry: { attempts: 1, error: passing } } : {}),
           },
         },
-      });
+      }, sql, context);
       // A body fetched again arrives as a new revision (analysed again); stop retrying it.
       if (known) await sql`UPDATE articles SET raw = raw #- '{dajiala,bodyRetry}' WHERE id = ${known.id}`;
       if (res.created) created += 1;
-      if (res.created || res.revised || res.processingNeeded) await queueProcessing(res.articleId);
+      if (res.created || res.revised || res.processingNeeded) await queueProcessing(res.articleId, { context });
     }
     const cursor = { ...(source.cursor ?? {}), lastCheckedAt: new Date().toISOString(), lastPostTime: posts[0]?.post_time ?? source.cursor?.lastPostTime ?? null, remainMoney: history.remainMoney };
     await sql`
@@ -127,13 +130,13 @@ export async function checkMpAccount(sourceId: string, reason: "schedule" | "man
 export async function scheduleMpReconcile(now = new Date()) {
   // Without Dajiala there is nothing to check the accounts with.
   if (!dajialaConfigured()) return { enqueued: 0 };
-  const rows = await sql<{ id: string; last: string | null; interval_minutes: number }[]>`
-    SELECT id, cursor->>'lastCheckedAt' AS last, interval_minutes FROM sources WHERE kind = 'mp_account' AND enabled`;
+  const rows = await sql<{ id: string; space_id: string; last: string | null; interval_minutes: number }[]>`
+    SELECT id, space_id, cursor->>'lastCheckedAt' AS last, interval_minutes FROM sources WHERE kind = 'mp_account' AND enabled AND EXISTS (SELECT 1 FROM spaces sp WHERE sp.id = sources.space_id AND sp.enabled)`;
   let enqueued = 0;
   for (const s of rows) {
     const since = s.last ? now.getTime() - Date.parse(s.last) : Infinity;
     if (since <= s.interval_minutes * 60_000) continue;
-    await enqueue(QUEUES.mpCheck, { sourceId: s.id, reason: "schedule" }, { singletonKey: `mp:${s.id}` });
+    await enqueue(QUEUES.mpCheck, { sourceId: s.id, reason: "schedule", context: await resolveSpaceContext(s.space_id) }, { singletonKey: `mp:${s.id}` });
     enqueued += 1;
   }
   return { enqueued };

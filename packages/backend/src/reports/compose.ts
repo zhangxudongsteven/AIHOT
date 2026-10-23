@@ -4,19 +4,20 @@
 // dailies and a model only writes its overview and introductions, from the brief in the industry pack
 // (industry/prompts/report-period*.md).
 import { z } from "zod";
-import { EDITION_TIMES, REPORTS, SITE } from "@aihot/site";
-import { PLAIN_TERMS, RELEASE } from "@aihot/industry/taxonomy";
-import { promptText, promptVersion } from "../editorial/prompts.ts";
+import { SITE } from "@aihot/site";
+import { promptText, promptVersion, promptVersionFor } from "../editorial/prompts.ts";
 import { modelFor } from "../editorial/models.ts";
-import { ENTITIES, entityNames, isRelease } from "../editorial/vocabulary.ts";
+import { ENTITIES, entityNames } from "../editorial/vocabulary.ts";
 import { addDays, beijingAt, beijingDate, beijingTime, isoWeekLabel, isoWeekRange, monthRange } from "@aihot/contracts/time";
+import { configForContext, type SpaceContext } from "../spaces/context.ts";
+import { reportConfig, reportContext } from "./config.ts";
 import { sql } from "../db.ts";
 import { logError } from "../lib/log-error.ts";
 import { chatJson } from "../providers/llm.ts";
 import { completeReceipt } from "../providers/receipts.ts";
-import { shutdownSignal } from "../jobs/queue.ts";
+import { enqueue, QUEUES, shutdownSignal } from "../jobs/queue.ts";
 import { emit } from "../modules.ts";
-import { arrangeDaily, candidates, dailyEdition, periodEntries, sectionOf, SECTION_ORDER, type Candidate, type EditionEntry } from "./edition.ts";
+import { arrangeDaily, candidates, dailyEdition, periodEntries, sectionOf, sectionOrder, type Candidate, type EditionEntry } from "./edition.ts";
 
 export const REPORT_VERSION = promptVersion("report-period", "report-period-sections", "report-period-no-sections");
 
@@ -26,51 +27,81 @@ export const REPORT_VERSION = promptVersion("report-period", "report-period-sect
  * category and its tag, so not a ranking or a test) that a maker announced itself, new that day. An
  * industry without such a kind has no release figure.
  */
-export function dailyMetrics(main: EditionEntry[]) {
+export function dailyMetrics(main: EditionEntry[], context?: SpaceContext) {
+  const release = reportConfig(context).release;
   return {
     totalEvents: main.length,
     sourcesCount: new Set(main.flatMap((e) => [e.entry.sourceId, ...(e.entry.related ?? []).map((r) => r.sourceId)])).size,
-    ...(RELEASE ? { modelsReleased: main.filter((e) => isRelease(e.category, e.tags) && !e.previous && e.authority < 3).length } : {}),
+    ...(release ? { modelsReleased: main.filter((e) => e.category === release.category && e.tags.includes(release.tag) && !e.previous && e.authority < 3).length } : {}),
     firstPartyEvents: main.filter((e) => e.entry.firstParty).length,
   };
 }
 
 type ReportKind = "daily" | "weekly" | "monthly";
+type ReportStatus = "published" | "existing" | "stale";
+export interface ComposedReport { key: string; entries: number; status: ReportStatus }
 
 /** How many events an issue already published carries; nothing when it does not exist yet. */
-async function savedReport(kind: ReportKind, key: string) {
+async function savedReport(kind: ReportKind, key: string, context: SpaceContext) {
   const [row] = await sql<{ entries: number }[]>`
     SELECT coalesce(CASE WHEN kind = 'daily' THEN (content->'metrics'->>'totalEvents')::int ELSE jsonb_array_length(content->'storyOrder') END, 0) AS entries
-    FROM reports WHERE kind = ${kind} AND key = ${key}`;
+    FROM reports WHERE space_id = ${context.spaceId} AND kind = ${kind} AND key = ${key}`;
   return row;
 }
 
 /**
  * Without a reason (the scheduled run) only a missing issue is written: one already published stays as
  * it is. With a reason (an explicit regeneration) the issue is replaced and the edition it replaces is
- * kept as a revision. Says whether the issue was written.
+ * kept as a revision. A superseded or disabled channel only completes its paid receipts.
  */
-async function saveReport(kind: ReportKind, key: string, start: Date, end: Date, content: Record<string, unknown>, reason: string | undefined, model: string | null, receiptIds: number[]): Promise<boolean> {
+async function saveReport(kind: ReportKind, key: string, start: Date, end: Date, content: Record<string, unknown>, reason: string | undefined, model: string | null, receiptIds: number[], context: SpaceContext): Promise<ReportStatus> {
   return sql.begin(async (tx) => {
-    const insert = async () => (await tx`INSERT INTO reports (kind, key, window_start, window_end, content, generated_at, model, origin)
-      VALUES (${kind}, ${key}, ${start}, ${end}, ${tx.json(content as never)}, now(), ${model}, 'model') ON CONFLICT (kind, key) DO NOTHING`).count > 0;
+    // A model may finish after activation or shutdown of this channel. Serialize the final write
+    // against that change; old answers remain accounted for but cannot replace the current edition.
+    const [space] = await tx<{ enabled: boolean; active_config_version: string | null }[]>`
+      SELECT enabled, active_config_version FROM spaces WHERE id = ${context.spaceId} FOR SHARE`;
+    if (!space?.enabled || space.active_config_version !== context.configVersion) {
+      for (const id of receiptIds) await completeReceipt(tx, id);
+      return "stale";
+    }
+    const cited = new Set<string>();
+    const visit = (value: unknown): void => {
+      if (!value || typeof value !== "object") return;
+      if ("itemId" in value && typeof value.itemId === "string") cited.add(value.itemId);
+      for (const child of Object.values(value)) visit(child);
+    };
+    visit(content);
+    const references = [...cited];
+    if (references.length) {
+      const owned = await tx<{ article_id: string }[]>`SELECT article_id FROM publications WHERE space_id = ${context.spaceId} AND article_id = ANY(${references}::text[])`;
+      if (owned.length !== references.length) throw new Error(`Report contains an unknown or foreign article: ${context.spaceId}`);
+    }
+    const insert = async () => (await tx`INSERT INTO reports (space_id, config_version, kind, key, window_start, window_end, content, generated_at, model, origin)
+      VALUES (${context.spaceId}, ${context.configVersion}, ${kind}, ${key}, ${start}, ${end}, ${tx.json(content as never)}, now(), ${model}, 'model') ON CONFLICT (space_id, kind, key) DO NOTHING`).count > 0;
     let written: boolean;
     if (reason === undefined) written = await insert();
     else {
-      const [existing] = await tx<{ id: number; revision: number; content: unknown; generated_at: Date }[]>`
-        SELECT id, revision, content, generated_at FROM reports WHERE kind = ${kind} AND key = ${key} FOR UPDATE`;
+      const [existing] = await tx<{ id: number; revision: number; content: unknown; generated_at: Date; config_version: string | null }[]>`
+        SELECT id, revision, content, generated_at, config_version FROM reports WHERE space_id = ${context.spaceId} AND kind = ${kind} AND key = ${key} FOR UPDATE`;
       if (existing) {
-        await tx`INSERT INTO report_revisions (report_id, revision, content, generated_at, reason)
-                 VALUES (${existing.id}, ${existing.revision}, ${tx.json(existing.content as never)}, ${existing.generated_at}, ${reason}) ON CONFLICT DO NOTHING`;
+        await tx`INSERT INTO report_revisions (report_id, revision, content, generated_at, reason, config_version)
+                 VALUES (${existing.id}, ${existing.revision}, ${tx.json(existing.content as never)}, ${existing.generated_at}, ${reason}, ${existing.config_version}) ON CONFLICT DO NOTHING`;
         await tx`UPDATE reports SET content = ${tx.json(content as never)}, window_start = ${start}, window_end = ${end}, generated_at = now(),
-                   model = ${model}, revision = revision + 1, origin = 'model', updated_at = now() WHERE id = ${existing.id}`;
+                   model = ${model}, config_version = ${context.configVersion}, revision = revision + 1, origin = 'model', updated_at = now() WHERE id = ${existing.id}`;
         written = true;
       } else written = await insert();
     }
     // A new issue changes the latest page, the archive, its neighbours' navigation and the report feeds.
-    if (written) await emit("reportsChanged", { reason: `${kind} ${key} published` }, tx);
+    if (written) {
+      await emit("reportsChanged", { reason: `${kind} ${key} published` }, tx);
+      // Only newly scheduled editions are pushed; an operator correction does not resend an issue.
+      if (reason === undefined) {
+        const [report] = await tx<{ id: number }[]>`SELECT id FROM reports WHERE space_id = ${context.spaceId} AND kind = ${kind} AND key = ${key}`;
+        await enqueue(QUEUES.notifyReport, { reportId: report!.id, context }, { singletonKey: `report:${report!.id}` }, tx);
+      }
+    }
     for (const id of receiptIds) await completeReceipt(tx, id);
-    return written;
+    return written ? "published" : "existing";
   });
 }
 
@@ -86,34 +117,36 @@ function windowPoint(at: Date): string {
  * the editors judged with nothing new in it still has its issue: no entries, and a lead that says so
  * (REPORTS.quiet).
  */
-export async function composeDaily(date: string, reason?: string): Promise<{ key: string; entries: number }> {
-  const previous = await savedReport("daily", date);
-  if (previous && reason === undefined) return { key: date, entries: previous.entries };
-  const end = beijingAt(date, EDITION_TIMES.daily);
+export async function composeDaily(date: string, reason?: string, context?: SpaceContext): Promise<ComposedReport> {
+  context = await reportContext(context);
+  const settings = reportConfig(context);
+  const previous = await savedReport("daily", date, context);
+  if (previous && reason === undefined) return { key: date, entries: previous.entries, status: "existing" };
+  const end = beijingAt(date, settings.editionTimes.daily);
   const start = new Date(end.getTime() - 86400000);
-  const edition = await dailyEdition(date, start, end);
+  const edition = await dailyEdition(date, start, end, context);
   // Nothing judged in the window is a failure upstream, not a quiet day: the run fails and is caught up later.
   if (edition.entries.length === 0 && edition.stats.judgedReports === 0) throw new Error(`daily ${date}: nothing judged in its window`);
-  const issue = arrangeDaily(edition.entries);
+  const issue = arrangeDaily(edition.entries, context);
   const [lead, ...rest] = issue.main;
   const content = {
     date,
     lead: lead
       ? { title: lead.entry.title, leadParagraph: lead.entry.summary }
-      : { title: REPORTS.quiet.title, leadParagraph: REPORTS.quiet.paragraph.replace("{start}", windowPoint(start)).replace("{end}", windowPoint(end)) },
+      : { title: settings.quiet.title, leadParagraph: settings.quiet.paragraph.replace("{start}", windowPoint(start)).replace("{end}", windowPoint(end)) },
     leadItemId: lead?.entry.itemId ?? null,
     highlights: rest.slice(0, 3).map((e) => e.entry.itemId),
-    sections: SECTION_ORDER
-      .map((label) => ({ label, items: issue.main.filter((e) => sectionOf(e.category) === label).map((e) => e.entry) }))
+    sections: sectionOrder(context)
+      .map((label) => ({ label, items: issue.main.filter((e) => sectionOf(e.category, context) === label).map((e) => e.entry) }))
       .filter((s) => s.items.length > 0),
     flashes: issue.flashes.map((e) => e.entry),
-    metrics: dailyMetrics(issue.main),
+    metrics: dailyMetrics(issue.main, context),
     windowStart: start.toISOString(),
     windowEnd: end.toISOString(),
-    generator: { version: REPORT_VERSION, ...edition.stats, ...issue.stats },
+    generator: { version: promptVersionFor(context, "report-period", "report-period-sections", "report-period-no-sections"), configVersion: context.configVersion, ...edition.stats, ...issue.stats },
   };
-  await saveReport("daily", date, start, end, content, reason, null, []);
-  return { key: date, entries: issue.main.length };
+  const status = await saveReport("daily", date, start, end, content, reason, null, [], context);
+  return { key: date, entries: issue.main.length, status };
 }
 
 /** A weekly's or monthly's size: the events it carries, chosen and ordered by rule. */
@@ -139,22 +172,19 @@ export const PeriodSchema = z.object({
  * the overview and the introductions of the sections large enough for one, and decides nothing about
  * what the issue carries.
  */
-export function periodPrompt(kind: "weekly" | "monthly", startDate: string, endDateInclusive: string, groups: Array<{ label: string; items: Candidate[] }>) {
+export function periodPrompt(kind: "weekly" | "monthly", startDate: string, endDateInclusive: string, groups: Array<{ label: string; items: Candidate[] }>, context?: SpaceContext) {
   const list = groups.map((g) => [`【${g.label}】`, ...g.items.map((e) => `- ${e.title}｜${e.summary.slice(0, 140)}`)].join("\n")).join("\n");
   const introduced = groups.filter((g) => g.items.length >= INTRO_EVENTS).map((g) => g.label);
   return {
     system: promptText("report-period", {
       ...BRIEF[kind],
-      sections: introduced.length ? promptText("report-period-sections", { columns: introduced.map((l) => `「${l}」`).join("") }) : promptText("report-period-no-sections"),
+      sections: introduced.length ? promptText("report-period-sections", { columns: introduced.map((l) => `「${l}」`).join("") }, context) : promptText("report-period-no-sections", {}, context),
       sectionsExample: introduced.length ? `{"${introduced[0]}": "..."}` : "{}",
-    }),
+    }, context),
     user: `本期：${startDate} 至 ${endDateInclusive}\n${list}`,
   };
 }
 
-const COMPANY_NAMES = Object.values(ENTITIES).map((e) => entityNames(e).map((n) => n.toLowerCase()));
-/** Words a writer may use that name nothing in particular: the pack's plain terms and the site's name. */
-const PLAIN = new Set([...PLAIN_TERMS, SITE.name.toLowerCase()]);
 
 /**
  * Whether written text names only what the listed items name: every capitalised or numbered Latin token
@@ -162,14 +192,17 @@ const PLAIN = new Set([...PLAIN_TERMS, SITE.name.toLowerCase()]);
  * 129.3, 40%) and every company of the vocabulary appears in the items' own words; a company may be named
  * in either language (谷歌 for Google).
  */
-export function grounded(text: string, corpus: string): boolean {
+export function grounded(text: string, corpus: string, context?: SpaceContext): boolean {
+  const pack = context ? configForContext(context) : null;
+  const companyNames = Object.values(pack?.entities ?? ENTITIES).map(e => entityNames(e).map(n => n.toLowerCase()));
+  const plain = new Set([...reportConfig(context).plainTerms, (pack?.siteName ?? SITE.name).toLowerCase()]);
   const known = corpus.toLowerCase();
-  const companies = COMPANY_NAMES.filter((names) => names.some((n) => known.includes(n)));
-  const named = (word: string) => PLAIN.has(word) || known.includes(word) || companies.some((names) => names.includes(word));
+  const companies = companyNames.filter((names) => names.some((n) => known.includes(n)));
+  const named = (word: string) => plain.has(word) || known.includes(word) || companies.some((names) => names.includes(word));
   const words = (text.match(/[A-Za-z][A-Za-z0-9.+-]*/g) ?? []).map((w) => w.replace(/[.+-]+$/, "")).filter((w) => /[A-Z0-9]/.test(w));
   const figures = (text.match(/\d+(?:\.\d+)?%?/g) ?? []).filter((f) => f.length >= 3 || /[.%]/.test(f));
   const lower = text.toLowerCase();
-  const mentioned = COMPANY_NAMES.filter((names) => names.some((n) => /\p{Script=Han}/u.test(n) && lower.includes(n)));
+  const mentioned = companyNames.filter((names) => names.some((n) => /\p{Script=Han}/u.test(n) && lower.includes(n)));
   return words.every((w) => named(w.toLowerCase())) && figures.every((f) => known.includes(f)) && mentioned.every((names) => companies.includes(names));
 }
 
@@ -191,36 +224,37 @@ export function fitted(text: string, max: number): string | null {
  * Without a usable overview the issue is saved with none (see periodOverview).
  * An automatic run skips a complete period of quiet dailies without publishing an empty issue.
  */
-async function composePeriod(kind: "weekly" | "monthly", key: string, startDate: string, endDateInclusive: string, reason: string | undefined) {
-  const previous = await savedReport(kind, key);
-  if (previous && reason === undefined) return { key, entries: previous.entries };
+async function composePeriod(kind: "weekly" | "monthly", key: string, startDate: string, endDateInclusive: string, reason: string | undefined, context: SpaceContext): Promise<ComposedReport | null> {
+  const settings = reportConfig(context);
+  const previous = await savedReport(kind, key, context);
+  if (previous && reason === undefined) return { key, entries: previous.entries, status: "existing" };
   // The dailies' windows run from the edition time the day before the first to that time on the last.
-  const start = beijingAt(addDays(startDate, -1), EDITION_TIMES.daily);
-  const end = beijingAt(endDateInclusive, EDITION_TIMES.daily);
-  const { entries, issues, hasEntries } = await periodEntries(startDate, endDateInclusive);
+  const start = beijingAt(addDays(startDate, -1), settings.editionTimes.daily);
+  const end = beijingAt(endDateInclusive, settings.editionTimes.daily);
+  const { entries, issues, hasEntries } = await periodEntries(startDate, endDateInclusive, context);
   const top = entries.slice(0, PERIOD_EVENTS[kind]);
   if (!top.length) {
     if (reason === undefined && !hasEntries && issues > 0) {
       // Before the site's first daily there was nothing to publish; missing later dailies are still a failure.
-      const [{ first }] = await sql<{ first: string | null }[]>`SELECT min(key) AS first FROM reports WHERE kind = 'daily'`;
+      const [{ first }] = await sql<{ first: string | null }[]>`SELECT min(key) AS first FROM reports WHERE space_id = ${context.spaceId} AND kind = 'daily'`;
       const firstDate = first && first > startDate ? first : startDate;
       const days = (Date.parse(endDateInclusive) - Date.parse(firstDate)) / 86400000 + 1;
       if (issues === days) return null;
     }
     throw new Error(`${kind} ${key}: no daily entries in the period`);
   }
-  const selected = await candidates(start, end);
-  const groups = SECTION_ORDER
-    .map((label) => ({ label, items: top.filter((e) => sectionOf(e.category) === label) }))
+  const selected = await candidates(start, end, context);
+  const groups = sectionOrder(context)
+    .map((label) => ({ label, items: top.filter((e) => sectionOf(e.category, context) === label) }))
     .filter((g) => g.items.length > 0);
   const corpus = [`${startDate} ${endDateInclusive}`, ...top.map((e) => `${e.title} ${e.summary}`)].join("\n");
-  const model = await modelFor("report");
+  const model = await modelFor("report", context);
   let written: z.infer<typeof PeriodSchema> = { overview: "", sections: {} };
   let receiptId: number | null = null;
   try {
     const res = await chatJson({
-      model, purpose: `report_${kind}`, subject: `report:${kind}:${key}`, promptVersion: REPORT_VERSION,
-      ...periodPrompt(kind, startDate, endDateInclusive, groups), schema: PeriodSchema, temperature: 0.3, maxTokens: 2500,
+      context, model, purpose: `report_${kind}`, subject: `report:${kind}:${key}`, promptVersion: promptVersionFor(context, "report-period", "report-period-sections", "report-period-no-sections"),
+      ...periodPrompt(kind, startDate, endDateInclusive, groups, context), schema: PeriodSchema, temperature: 0.3, maxTokens: 2500,
     });
     written = res.data;
     receiptId = res.receiptId;
@@ -230,7 +264,7 @@ async function composePeriod(kind: "weekly" | "monthly", key: string, startDate:
   }
   const usable = (text: string | undefined, max: number) => {
     const fit = fitted(text ?? "", max);
-    return fit && grounded(fit, corpus) ? fit : null;
+    return fit && grounded(fit, corpus, context) ? fit : null;
   };
   // Without a usable one the read layer says what the issue carries, naming only what is still public.
   const overview = usable(written.overview, OVERVIEW_CHARS[kind]);
@@ -238,7 +272,7 @@ async function composePeriod(kind: "weekly" | "monthly", key: string, startDate:
   const [lead] = top as [Candidate, ...Candidate[]];
   const content = {
     kind,
-    title: kind === "weekly" ? `${SITE.name} 周报 · ${key}` : `${SITE.name} 月报 · ${key}`,
+    title: kind === "weekly" ? `${configForContext(context).siteName} 周报 · ${key}` : `${configForContext(context).siteName} 月报 · ${key}`,
     ...(kind === "weekly" ? { isoLabel: key } : { monthLabel: key }),
     periodStart: startDate,
     periodEnd: endDateInclusive,
@@ -249,42 +283,42 @@ async function composePeriod(kind: "weekly" | "monthly", key: string, startDate:
     themes: groups.map((g) => ({ heading: g.label, summary: intro(g), storyRefs: g.items.map(({ category: _c, factKey: _f, ...e }) => e) })),
     storyOrder: top.map((e) => e.itemId),
     metrics: { totalStories: top.length, selectedCount: selected.length, reportsCovered: issues },
-    generator: { version: REPORT_VERSION, model, written: overview !== null },
+    generator: { version: promptVersionFor(context, "report-period", "report-period-sections", "report-period-no-sections"), configVersion: context.configVersion, model, written: overview !== null },
   };
-  await saveReport(kind, key, start, end, content, reason, model, receiptId === null ? [] : [receiptId]);
-  return { key, entries: top.length };
+  const status = await saveReport(kind, key, start, end, content, reason, model, receiptId === null ? [] : [receiptId], context);
+  return { key, entries: top.length, status };
 }
 
-export async function composeWeekly(label: string, reason?: string) {
+export async function composeWeekly(label: string, reason?: string, context?: SpaceContext) {
   const range = isoWeekRange(label);
   if (!range) throw new Error(`bad week label ${label}`);
-  return composePeriod("weekly", label, range.start, range.end, reason);
+  return composePeriod("weekly", label, range.start, range.end, reason, await reportContext(context));
 }
 
-export async function composeMonthly(label: string, reason?: string) {
+export async function composeMonthly(label: string, reason?: string, context?: SpaceContext) {
   const range = monthRange(label);
   if (!range) throw new Error(`bad month label ${label}`);
-  return composePeriod("monthly", label, range.start, range.end, reason);
+  return composePeriod("monthly", label, range.start, range.end, reason, await reportContext(context));
 }
 
 /** The newest daily due by `now`: today's from its edition time (Beijing), yesterday's before. */
-export function dueDaily(now = new Date()): string {
+export function dueDaily(now = new Date(), context?: SpaceContext): string {
   const today = beijingDate(now);
-  return beijingTime(now) >= EDITION_TIMES.daily ? today : addDays(today, -1);
+  return beijingTime(now) >= reportConfig(context).editionTimes.daily ? today : addDays(today, -1);
 }
 
 /** The newest weekly due by `now`: the last complete ISO week from its edition time on Monday, the one before until then. */
-export function dueWeekly(now = new Date()): string {
+export function dueWeekly(now = new Date(), context?: SpaceContext): string {
   const today = beijingDate(now);
   const dow = (new Date(`${today}T00:00:00Z`).getUTCDay() + 6) % 7;
-  const due = dow > 0 || beijingTime(now) >= EDITION_TIMES.weekly;
+  const due = dow > 0 || beijingTime(now) >= reportConfig(context).editionTimes.weekly;
   return isoWeekLabel(addDays(today, -dow - (due ? 7 : 14)));
 }
 
 /** The newest monthly due by `now`: the last complete month from its edition time on the 1st, the one before until then. */
-export function dueMonthly(now = new Date()): string {
+export function dueMonthly(now = new Date(), context?: SpaceContext): string {
   const [y, m, d] = beijingDate(now).split("-").map(Number) as [number, number, number];
-  const due = d > 1 || beijingTime(now) >= EDITION_TIMES.monthly;
+  const due = d > 1 || beijingTime(now) >= reportConfig(context).editionTimes.monthly;
   const back = due ? 1 : 2;
   const month = (y * 12 + (m - 1) - back);
   return `${Math.floor(month / 12)}-${String((month % 12) + 1).padStart(2, "0")}`;
@@ -302,26 +336,29 @@ const nextMonth = (label: string) => {
  * filled too. A kind with no issue yet only gets its latest due one. An issue that fails does not hold
  * up the others; at most `limit` issues are written per run, the next run continues.
  */
-export async function composeDueReports(now = new Date(), limit = 8): Promise<{ generated: string[]; failed: string[] }> {
+export async function composeDueReports(now = new Date(), limit = 8, context?: SpaceContext): Promise<{ generated: string[]; failed: string[] }> {
+  context = await reportContext(context);
   const generated: string[] = [];
   const failed: string[] = [];
-  const kinds: Array<{ kind: ReportKind; due: string; next: (k: string) => string; end: (k: string) => string; compose: (k: string) => Promise<unknown> }> = [
-    { kind: "daily", due: dueDaily(now), next: (k) => addDays(k, 1), end: (k) => k, compose: composeDaily },
-    { kind: "weekly", due: dueWeekly(now), next: nextWeek, end: (k) => isoWeekRange(k)!.end, compose: composeWeekly },
-    { kind: "monthly", due: dueMonthly(now), next: nextMonth, end: (k) => monthRange(k)!.end, compose: composeMonthly },
+  const kinds: Array<{ kind: ReportKind; due: string; next: (k: string) => string; end: (k: string) => string; compose: (k: string) => Promise<ComposedReport | null> }> = [
+    { kind: "daily", due: dueDaily(now, context), next: (k) => addDays(k, 1), end: (k) => k, compose: (key) => composeDaily(key, undefined, context) },
+    { kind: "weekly", due: dueWeekly(now, context), next: nextWeek, end: (k) => isoWeekRange(k)!.end, compose: (key) => composeWeekly(key, undefined, context) },
+    { kind: "monthly", due: dueMonthly(now, context), next: nextMonth, end: (k) => monthRange(k)!.end, compose: (key) => composeMonthly(key, undefined, context) },
   ];
   // Weeklies and monthlies sum up dailies: a period that ended before the site's first daily has nothing to sum
   // up and is not due (a site started mid-month would otherwise fail that month's issue on every run).
-  const [{ first: firstDaily }] = await sql<{ first: string | null }[]>`SELECT min(key) AS first FROM reports WHERE kind = 'daily'`;
+  const [{ first: firstDaily }] = await sql<{ first: string | null }[]>`SELECT min(key) AS first FROM reports WHERE space_id = ${context.spaceId} AND kind = 'daily'`;
   kinds: for (const k of kinds) {
-    const have = new Set((await sql<{ key: string }[]>`SELECT key FROM reports WHERE kind = ${k.kind}`).map((r) => r.key));
+    const have = new Set((await sql<{ key: string }[]>`SELECT key FROM reports WHERE space_id = ${context.spaceId} AND kind = ${k.kind}`).map((r) => r.key));
     const first = [...have].sort()[0] ?? k.due;
     for (let key = first; key <= k.due; key = k.next(key)) {
       if (have.has(key)) continue;
       if (k.kind !== "daily" && (!firstDaily || k.end(key) < firstDaily)) continue;
       if (shutdownSignal.signal.aborted || generated.length >= limit) break kinds;
       try {
-        if (await k.compose(key) !== null) generated.push(`${k.kind}:${key}`);
+        const result = await k.compose(key);
+        if (result?.status === "stale") break kinds;
+        if (result?.status === "published") generated.push(`${k.kind}:${key}`);
       } catch (error) {
         // An issue interrupted by the stop is not a failure: it is written after the restart.
         if (shutdownSignal.signal.aborted) break kinds;

@@ -3,6 +3,7 @@
 import { Readability } from "@mozilla/readability";
 import type { parseHTML } from "linkedom";
 import { sql } from "../db.ts";
+import { DEFAULT_SPACE_ID, resolveSpaceContext, type SpaceContext } from "../spaces/context.ts";
 import { guardedFetch, languageHeaders } from "../lib/http-fetch.ts";
 import { assertPageContent, contentDocument, UnavailablePageError } from "../lib/page-content.ts";
 import { stripTags } from "../lib/text.ts";
@@ -417,7 +418,7 @@ export function readableDocument(document: Doc, url: string, rules: PageRules = 
   return { html: clean, text, images, via: "readability", ...date };
 }
 
-export async function extractFromUrl(url: string, subject: string, rules: PageRules = {}, opts: { paidFallback?: boolean } = {}): Promise<ExtractedBody | null> {
+export async function extractFromUrl(url: string, subject: string, rules: PageRules = {}, opts: { paidFallback?: boolean; context?: SpaceContext } = {}): Promise<ExtractedBody | null> {
   if (isVideoPageUrl(url)) return null;
   try {
     const res = await guardedFetch(url, { headers: languageHeaders(rules.acceptLanguage), timeoutMs: 20_000, maxBytes: 6 * 1024 * 1024 });
@@ -433,7 +434,7 @@ export async function extractFromUrl(url: string, subject: string, rules: PageRu
   }
   if (opts.paidFallback === false) return null;
   try {
-    const page = await jinaRead(url, { purpose: "body_fallback", subject });
+    const page = await jinaRead(url, { purpose: "body_fallback", subject, context: opts.context });
     const html = markdownBody(page.markdown, url);
     const text = stripTags(html);
     if (text.length < MIN_BODY_CHARS) return null;
@@ -456,21 +457,29 @@ export function pageFetchable(url: string, sourceKind: string): boolean {
 }
 
 /** Fetches and stores the body of one article. Unconfirmed bodies are recorded as such. */
-export async function extractArticleBody(articleId: string): Promise<"ok" | "unconfirmed" | "skipped"> {
-  const [a] = await sql<{ id: string; url: string; body_status: string; revision: number; x_post: { tweetId?: string } | null; config: SourceRow["config"] }[]>`
-    SELECT a.id, a.url, a.body_status, a.revision, a.x_post, s.config
+export async function extractArticleBody(articleId: string, opts: { context?: SpaceContext; inputRevision?: number; generation?: number } = {}): Promise<"ok" | "unconfirmed" | "skipped"> {
+  const [a] = await sql<{ id: string; space_id: string; processing_generation: number; processing_config_version: string | null; url: string; body_status: string; revision: number; x_post: { tweetId?: string } | null; config: SourceRow["config"] }[]>`
+    SELECT a.id, a.space_id, a.processing_generation, a.processing_config_version, a.url, a.body_status, a.revision, a.x_post, s.config
     FROM articles a JOIN sources s ON s.id = a.source_id WHERE a.id = ${articleId}`;
-  if (!a || a.body_status === "ok") return "skipped";
-  if (a.x_post?.tweetId) return extractXArticle(a.id, a.x_post.tweetId, a.revision);
-  const got = await extractFromUrl(a.url, `article:${a.id}`, pageRules(a.config));
+  if (!a) return "skipped";
+  if (a.space_id !== (opts.context?.spaceId ?? DEFAULT_SPACE_ID)) throw new Error("Extraction space does not own article");
+  if (a.space_id !== DEFAULT_SPACE_ID && a.processing_config_version === null) throw new Error("A non-default article has no pinned processing configuration");
+  if ((opts.inputRevision !== undefined && opts.inputRevision !== a.revision)
+    || (opts.generation !== undefined && opts.generation !== a.processing_generation)
+    || (opts.context && a.processing_config_version !== null && opts.context.configVersion !== a.processing_config_version)) return "skipped";
+  const context = await resolveSpaceContext(a.space_id, opts.context?.configVersion ?? a.processing_config_version ?? undefined);
+  if (a.body_status === "ok") return "skipped";
+  if (a.x_post?.tweetId) return extractXArticle(a.id, a.x_post.tweetId, a.revision, a.processing_generation, a.processing_config_version, context);
+  const got = await extractFromUrl(a.url, `article:${a.id}`, pageRules(a.config), { context });
   if (!got) {
-    return markUnconfirmed(articleId, a.revision);
+    return markUnconfirmed(articleId, a.revision, a.processing_generation, a.processing_config_version);
   }
   // The body is new content: a new revision, so an analysis of the body-less input counts as stale.
   return sql.begin(async (tx) => {
     const [row] = await tx<{ title: string; excerpt: string | null; content_hash: string | null; media: MediaItem[] }[]>`
       SELECT title, excerpt, content_hash, media FROM articles
-      WHERE id = ${articleId} AND revision = ${a.revision} AND body_status <> 'ok' FOR UPDATE`;
+      WHERE id = ${articleId} AND revision = ${a.revision} AND processing_generation = ${a.processing_generation}
+        AND processing_config_version IS NOT DISTINCT FROM ${a.processing_config_version} AND body_status <> 'ok' FOR UPDATE`;
     if (!row) return "skipped";
     const time = a.config.detail?.publishedAtAuthoritative === true ? null : await fillPublicationTime(tx, articleId, got.publishedAt, undefined, got.publicationTime);
     const hash = contentHash({ title: row.title, bodyText: got.text, excerpt: row.excerpt });
@@ -488,9 +497,10 @@ export async function extractArticleBody(articleId: string): Promise<"ok" | "unc
   });
 }
 
-async function markUnconfirmed(articleId: string, revision: number): Promise<"unconfirmed" | "skipped"> {
+async function markUnconfirmed(articleId: string, revision: number, generation: number, configVersion: string | null): Promise<"unconfirmed" | "skipped"> {
   const rows = await sql`UPDATE articles SET body_status = 'unconfirmed', updated_at = now()
-    WHERE id = ${articleId} AND revision = ${revision} AND body_status <> 'ok' RETURNING id`;
+    WHERE id = ${articleId} AND revision = ${revision} AND processing_generation = ${generation}
+      AND processing_config_version IS NOT DISTINCT FROM ${configVersion} AND body_status <> 'ok' RETURNING id`;
   return rows.length ? "unconfirmed" : "skipped";
 }
 
@@ -500,16 +510,17 @@ async function markUnconfirmed(articleId: string, revision: number): Promise<"un
  * No article (the link points at someone else's, or X has none) leaves the post "unconfirmed", and
  * the judging steps are told the article was not fetched.
  */
-async function extractXArticle(articleId: string, tweetId: string, revision: number): Promise<"ok" | "unconfirmed" | "skipped"> {
-  const found = await getArticle(tweetId, { purpose: "x_article", subject: `article:${articleId}` });
+async function extractXArticle(articleId: string, tweetId: string, revision: number, generation: number, configVersion: string | null, context: SpaceContext): Promise<"ok" | "unconfirmed" | "skipped"> {
+  const found = await getArticle(tweetId, { purpose: "x_article", subject: `article:${articleId}`, context });
   const got = found ? xArticleText(found) : null;
   if (!got) {
-    return markUnconfirmed(articleId, revision);
+    return markUnconfirmed(articleId, revision, generation, configVersion);
   }
   return sql.begin(async (tx) => {
     const [row] = await tx<{ title: string; excerpt: string | null; body_text: string | null; x_post: { text?: string } | null; x_article: { title?: string | null; text?: string } | null }[]>`
       SELECT title, excerpt, body_text, x_post, x_article FROM articles
-      WHERE id = ${articleId} AND revision = ${revision} AND body_status <> 'ok' FOR UPDATE`;
+      WHERE id = ${articleId} AND revision = ${revision} AND processing_generation = ${generation}
+        AND processing_config_version IS NOT DISTINCT FROM ${configVersion} AND body_status <> 'ok' FOR UPDATE`;
     if (!row) return "skipped";
     const block = (a: { title?: string | null; text?: string } | null) => (a ? [a.title ? `# ${a.title}` : "", a.text ?? ""].filter(Boolean).join("\n\n") : "");
     // The post's own text, without an article appended by an earlier extraction (an admin re-run

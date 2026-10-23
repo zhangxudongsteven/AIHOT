@@ -4,6 +4,8 @@
 // post it replies to or quotes. A membership counts as evidence only when its report is not a
 // composite or explicitly withdrawn (groupingEvidenceCondition). Selected reports are reading context
 // for READING_DAYS: a reader who saw a launch in 精选 still knows it when its maker introduces it again.
+import { eventContext, assertEventReferences, type EventOptions } from "./scope.ts";
+import type { SpaceContext } from "../spaces/context.ts";
 import { sql } from "../db.ts";
 import { beijingDate } from "@aihot/contracts/time";
 import { sha256 } from "../lib/ids.ts";
@@ -37,16 +39,16 @@ export interface Recalled {
  * excluding composites and withdrawals. Fact ids do not follow time after a merge or an import;
  * a fact without eligible reports starts nothing.
  */
-export const rootFactOf = (story: ReturnType<typeof sql> | number) => sql`(
+export const rootFactOf = (story: ReturnType<typeof sql> | number, spaceId = "default") => sql`(
   SELECT y.id FROM facts y
-  JOIN fact_articles z ON z.fact_id = y.id AND z.role IN ('primary', 'report') AND ${groupingEvidenceCondition(sql`z.article_id`)}
+  JOIN fact_articles z ON z.fact_id = y.id AND z.role IN ('primary', 'report') AND ${groupingEvidenceCondition(sql`z.article_id`, spaceId)}
   JOIN publications q ON q.article_id = z.article_id
-  WHERE y.story_id = ${story}
+  WHERE y.story_id = ${story} AND y.space_id = ${spaceId}
   ORDER BY coalesce(q.published_at, q.discovered_at), y.id
   LIMIT 1)`;
 
 /** Reports of the recall window that belong to a live fact. */
-async function recallPool(): Promise<PoolRow[]> {
+async function recallPool(context: SpaceContext): Promise<PoolRow[]> {
   // Correlate the analysis lookup with articles so its discovery window is applied first.
   return sql<PoolRow[]>`
     SELECT fa.article_id, fa.fact_id, f.story_id, f.title AS fact_title, coalesce(p.revision, 0) AS revision
@@ -55,7 +57,7 @@ async function recallPool(): Promise<PoolRow[]> {
     JOIN stories st ON st.id = f.story_id AND st.merged_into IS NULL
     JOIN articles a ON a.id = fa.article_id
     LEFT JOIN publications p ON p.article_id = a.id
-    WHERE fa.role IN ('primary', 'report') AND ${groupingEvidenceCondition(sql`a.id`)} AND a.discovered_at > now() - make_interval(days => ${RECALL_DAYS})`;
+    WHERE a.space_id = ${context.spaceId} AND f.space_id = ${context.spaceId} AND fa.role IN ('primary', 'report') AND ${groupingEvidenceCondition(sql`a.id`, context.spaceId)} AND a.discovered_at > now() - make_interval(days => ${RECALL_DAYS})`;
 }
 
 type ReadingRow = ReportView & { article_id: string; revision: number; fact_id: number | null };
@@ -64,24 +66,26 @@ type ReadingRow = ReportView & { article_id: string; revision: number; fact_id: 
  * Already displayed reports supply reading context, never identity evidence: those without a fact,
  * and, past the recall window, those whose fact is not an identity candidate (shown there already).
  */
-async function selectedReadingPool(candidateFacts: number[]): Promise<ReadingRow[]> {
+async function selectedReadingPool(candidateFacts: number[], context: SpaceContext): Promise<ReadingRow[]> {
   return sql<ReadingRow[]>`
     SELECT p.article_id, p.revision, p.fact_id, p.title, p.summary, s.name AS source, (s.tier = 'T1') AS "firstParty",
       p.published_at AS at, a.publication_time AS "publicationTime", an.output->>'scope' AS scope
     FROM publications p JOIN articles a ON a.id = p.article_id JOIN sources s ON s.id = p.source_id LEFT JOIN analyses an ON an.id = p.analysis_id
-    WHERE ${selectedCondition(new Date())} AND p.discovered_at > now() - make_interval(days => ${READING_DAYS})
+    WHERE ${selectedCondition(new Date(), context.spaceId)} AND p.discovered_at > now() - make_interval(days => ${READING_DAYS})
       AND (p.fact_id IS NULL OR (p.discovered_at <= now() - make_interval(days => ${RECALL_DAYS}) AND NOT p.fact_id = ANY(${candidateFacts}::bigint[])))`;
 }
 
 /** The public title and summary of reports (the analysis when a report has no publication yet). */
-async function reportTexts(ids: string[]): Promise<Map<string, string>> {
+async function reportTexts(ids: string[], context: SpaceContext): Promise<Map<string, string>> {
   if (ids.length === 0) return new Map();
   const rows = await sql<{ id: string; title: string; summary: string | null }[]>`
     SELECT a.id, coalesce(p.title, an.title_zh, a.title) AS title, coalesce(p.summary, an.summary_zh, '') AS summary
     FROM articles a
     LEFT JOIN publications p ON p.article_id = a.id
-    LEFT JOIN LATERAL (SELECT title_zh, summary_zh FROM analyses x WHERE x.article_id = a.id ORDER BY input_revision DESC, id DESC LIMIT 1) an ON true
-    WHERE a.id = ANY(${ids})`;
+    LEFT JOIN LATERAL (SELECT title_zh, summary_zh FROM analyses x WHERE x.article_id = a.id AND x.processing_generation = a.processing_generation
+      AND (a.processing_config_version IS NULL OR x.config_version = a.processing_config_version
+        OR (a.space_id = 'default' AND x.processing_generation = 0 AND x.config_version IS NULL)) ORDER BY input_revision DESC, id DESC LIMIT 1) an ON true
+    WHERE a.id = ANY(${ids}) AND a.space_id = ${context.spaceId}`;
   return new Map(rows.map((r) => [r.id, reportText(r.title, r.summary)]));
 }
 
@@ -91,24 +95,26 @@ async function reportTexts(ids: string[]): Promise<Map<string, string>> {
 // provider and the same vector read back later give the same cosine.
 const vectorCache = new Map<string, { hash: string; vector: Float32Array; revision?: number }>();
 
-export async function vectorsFor(items: Array<{ id: string; text: string; revision?: number }>): Promise<Map<string, Float32Array>> {
+export async function vectorsFor(items: Array<{ id: string; text: string; revision?: number }>, options: EventOptions = {}): Promise<Map<string, Float32Array>> {
+  const context = await eventContext(options);
+  const cacheKey = (id: string) => `${context.spaceId}:${context.configVersion}:${id}`;
   const out = new Map<string, Float32Array>();
   const missing: Array<{ id: string; text: string; hash: string; revision?: number }> = [];
   for (const it of items) {
     const hash = sha256(it.text);
-    const cached = vectorCache.get(it.id);
+    const cached = vectorCache.get(cacheKey(it.id));
     if (cached && cached.hash === hash) {
       if (it.revision !== undefined) cached.revision = it.revision;
       out.set(it.id, cached.vector);
     } else missing.push({ ...it, hash });
   }
   if (missing.length) {
-    const got = await ensureEmbeddings(missing.map((m) => ({ id: m.id, text: m.text })));
+    const got = await ensureEmbeddings(missing.map((m) => ({ id: m.id, text: m.text })), context);
     for (const m of missing) {
       const v = got.get(m.id);
       if (!v) continue;
       const vector = Float32Array.from(v);
-      vectorCache.set(m.id, { hash: m.hash, vector, revision: m.revision });
+      vectorCache.set(cacheKey(m.id), { hash: m.hash, vector, revision: m.revision });
       out.set(m.id, vector);
     }
   }
@@ -132,10 +138,10 @@ export function cosine32(a: Float32Array, b: Float32Array): number {
 const LEXICAL_MIN = 0.25;
 
 /** Both identity candidates and reading context use the same stored vectors (or the lexical fallback). */
-async function similarReports(queryId: string, queryText: string, pool: Array<{ article_id: string; revision?: number }>, minScore: number): Promise<Map<string, number>> {
+async function similarReports(queryId: string, queryText: string, pool: Array<{ article_id: string; revision?: number }>, minScore: number, context: SpaceContext): Promise<Map<string, number>> {
   const scores = new Map<string, number>();
   if (pool.length && !embeddingsAvailable()) {
-    for (const [id, text] of await reportTexts([...new Set(pool.map((r) => r.article_id))])) {
+    for (const [id, text] of await reportTexts([...new Set(pool.map((r) => r.article_id))], context)) {
       const s = lexicalSimilarity(queryText, text);
       if (s >= LEXICAL_MIN) scores.set(id, s);
     }
@@ -149,13 +155,13 @@ async function similarReports(queryId: string, queryText: string, pool: Array<{ 
     // Keep this call's hits even if loading new vectors clears the process cache.
     const cached = new Map<string, Float32Array>();
     const uncached = ids.filter((id) => {
-      const hit = vectorCache.get(id);
+      const hit = vectorCache.get(`${context.spaceId}:${context.configVersion}:${id}`);
       if (!hit || hit.revision !== revisions.get(id)) return true;
       cached.set(id, hit.vector);
       return false;
     });
-    const texts = await reportTexts(uncached);
-    const fresh = await vectorsFor([{ id: queryId, text: queryText }, ...uncached.map((id) => ({ id, text: texts.get(id) ?? "", revision: revisions.get(id) })).filter((x) => x.text)]);
+    const texts = await reportTexts(uncached, context);
+    const fresh = await vectorsFor([{ id: queryId, text: queryText }, ...uncached.map((id) => ({ id, text: texts.get(id) ?? "", revision: revisions.get(id) })).filter((x) => x.text)], { context });
     const mine = fresh.get(queryId);
     if (mine) {
       for (const r of pool) {
@@ -170,9 +176,11 @@ async function similarReports(queryId: string, queryText: string, pool: Array<{ 
 }
 
 /** The best report of each fact counts; boosted facts (quoted/replied-to posts) are always included. */
-export async function recallFacts(queryId: string, queryText: string, minScore: number, top: number, boost: PoolRow[] = []): Promise<Recalled[]> {
-  const pool = (await recallPool()).filter((r) => r.article_id !== queryId);
-  const scores = await similarReports(queryId, queryText, pool, minScore);
+export async function recallFacts(queryId: string, queryText: string, minScore: number, top: number, boost: PoolRow[] = [], options: EventOptions = {}): Promise<Recalled[]> {
+  const context = await eventContext(options);
+  await assertEventReferences(sql, context.spaceId, { facts: boost.map(r => r.fact_id), articles: boost.map(r => r.article_id), stories: boost.map(r => r.story_id) });
+  const pool = (await recallPool(context)).filter((r) => r.article_id !== queryId);
+  const scores = await similarReports(queryId, queryText, pool, minScore, context);
   const best = new Map<number, Recalled>();
   const consider = (r: PoolRow, score: number) => {
     const prev = best.get(r.fact_id);
@@ -187,9 +195,10 @@ export async function recallFacts(queryId: string, queryText: string, minScore: 
 }
 
 /** A small separate context lets a single report compare with earlier selected coverage, one report per fact. */
-export async function recallSelectedBackground(queryId: string, queryText: string, minScore: number, candidateFacts: number[] = [], top = 3): Promise<ReadingContext[]> {
-  const pool = (await selectedReadingPool(candidateFacts)).filter(r => r.article_id !== queryId);
-  const scores = await similarReports(queryId, queryText, pool, minScore);
+export async function recallSelectedBackground(queryId: string, queryText: string, minScore: number, candidateFacts: number[] = [], top = 3, options: EventOptions = {}): Promise<ReadingContext[]> {
+  const context = await eventContext(options);
+  const pool = (await selectedReadingPool(candidateFacts, context)).filter(r => r.article_id !== queryId);
+  const scores = await similarReports(queryId, queryText, pool, minScore, context);
   const picked: ReadingRow[] = [];
   const facts = new Set<number>();
   for (const r of pool.filter(r => scores.has(r.article_id)).sort((a, b) => scores.get(b.article_id)! - scores.get(a.article_id)!)) {
@@ -211,7 +220,8 @@ export async function recallSelectedBackground(queryId: string, queryText: strin
  * What the judge sees of a candidate fact: its representative report (first-party first, else the
  * earliest), its size, and whether it started its story (rootFactOf).
  */
-export async function candidateViews(recalled: Recalled[]): Promise<CandidateView[]> {
+export async function candidateViews(recalled: Recalled[], options: EventOptions = {}): Promise<CandidateView[]> {
+  const context = await eventContext(options);
   if (recalled.length === 0) return [];
   const ids = recalled.map((r) => r.factId);
   type SelectedRow = RepresentativeRow & RepresentativeIdentity & {
@@ -223,21 +233,21 @@ export async function candidateViews(recalled: Recalled[]): Promise<CandidateVie
   }[]>`
     SELECT DISTINCT ON (fa.fact_id) fa.fact_id, f.story_id, f.title AS fact_title, f.subject, f.action, f.object, f.occurred_at,
            p.title, p.summary, s.name AS source, (s.tier = 'T1') AS first_party, p.published_at AS at, a.publication_time AS "publicationTime",
-           (SELECT count(*) FROM fact_articles x WHERE x.fact_id = fa.fact_id AND x.role IN ('primary', 'report') AND ${groupingEvidenceCondition(sql`x.article_id`)}) AS members,
-           ${rootFactOf(sql`f.story_id`)} AS root_fact_id
+           (SELECT count(*) FROM fact_articles x WHERE x.fact_id = fa.fact_id AND x.role IN ('primary', 'report') AND ${groupingEvidenceCondition(sql`x.article_id`, context.spaceId)}) AS members,
+           ${rootFactOf(sql`f.story_id`, context.spaceId)} AS root_fact_id
     FROM fact_articles fa
     JOIN facts f ON f.id = fa.fact_id
     JOIN publications p ON p.article_id = fa.article_id
     JOIN articles a ON a.id = p.article_id
     JOIN sources s ON s.id = p.source_id
-    WHERE fa.fact_id = ANY(${ids}) AND fa.role IN ('primary', 'report') AND ${groupingEvidenceCondition(sql`fa.article_id`)}
+    WHERE f.space_id = ${context.spaceId} AND a.space_id = ${context.spaceId} AND fa.fact_id = ANY(${ids}) AND fa.role IN ('primary', 'report') AND ${groupingEvidenceCondition(sql`fa.article_id`, context.spaceId)}
     ORDER BY fa.fact_id, (fa.role = 'primary') DESC, p.timeline_at ASC`,
     sql<SelectedRow[]>`
       SELECT p.fact_id, p.article_id, p.title, p.summary, p.body_mode, p.score, p.timeline_at,
         s.name AS source, (s.tier = 'T1') AS first_party, p.published_at AS at, a.publication_time AS "publicationTime",
         ${REPRESENTATIVE_COLUMNS}
       FROM publications p JOIN articles a ON a.id = p.article_id JOIN sources s ON s.id = p.source_id JOIN facts f ON f.id = p.fact_id
-      WHERE p.fact_id = ANY(${ids}) AND ${selectedCondition(new Date())} AND ${ownFactEvidenceCondition()}`,
+      WHERE f.space_id = ${context.spaceId} AND p.fact_id = ANY(${ids}) AND ${selectedCondition(new Date(), context.spaceId)} AND ${ownFactEvidenceCondition()}`,
   ]);
   const byFact = new Map(rows.map((r) => [Number(r.fact_id), r]));
   return recalled.flatMap((r) => {
@@ -265,19 +275,20 @@ export async function candidateViews(recalled: Recalled[]): Promise<CandidateVie
 }
 
 /** The live fact another report of the same page, or the X post this one replies to or quotes, belongs to. */
-export async function relatedPosts(a: { id: string; url: string; x_post: { replyTo?: string | null; quoted?: { url?: string } | null } | null }): Promise<{ sameUrl: PoolRow | null; referenced: PoolRow[] }> {
+export async function relatedPosts(a: { id: string; url: string; x_post: { replyTo?: string | null; quoted?: { url?: string } | null } | null }, options: EventOptions = {}): Promise<{ sameUrl: PoolRow | null; referenced: PoolRow[] }> {
+  const context = await eventContext(options);
   const [sameUrl] = await sql<PoolRow[]>`
     SELECT fa.article_id, fa.fact_id, f.story_id, f.title AS fact_title
     FROM articles b JOIN fact_articles fa ON fa.article_id = b.id AND fa.role IN ('primary', 'report')
     JOIN facts f ON f.id = fa.fact_id JOIN stories st ON st.id = f.story_id AND st.merged_into IS NULL
-    WHERE b.url = ${a.url} AND b.id <> ${a.id} AND ${groupingEvidenceCondition(sql`fa.article_id`)} ORDER BY fa.created_at LIMIT 1`;
+    WHERE b.space_id = ${context.spaceId} AND f.space_id = ${context.spaceId} AND b.url = ${a.url} AND b.id <> ${a.id} AND ${groupingEvidenceCondition(sql`fa.article_id`, context.spaceId)} ORDER BY fa.created_at LIMIT 1`;
   const ids = [a.x_post?.replyTo ?? null, a.x_post?.quoted?.url ? (/\/status\/(\d+)/.exec(a.x_post.quoted.url)?.[1] ?? null) : null].filter((x): x is string => !!x);
   const referenced = ids.length
     ? await sql<PoolRow[]>`
         SELECT fa.article_id, fa.fact_id, f.story_id, f.title AS fact_title
         FROM articles b JOIN fact_articles fa ON fa.article_id = b.id AND fa.role IN ('primary', 'report')
         JOIN facts f ON f.id = fa.fact_id JOIN stories st ON st.id = f.story_id AND st.merged_into IS NULL
-        WHERE b.identity_key = ANY(${ids.map((id) => `x:${id}`)}) AND b.id <> ${a.id} AND ${groupingEvidenceCondition(sql`fa.article_id`)}`
+        WHERE b.space_id = ${context.spaceId} AND f.space_id = ${context.spaceId} AND b.identity_key = ANY(${ids.map((id) => `x:${id}`)}) AND b.id <> ${a.id} AND ${groupingEvidenceCondition(sql`fa.article_id`, context.spaceId)}`
     : [];
   return { sameUrl: sameUrl ?? null, referenced };
 }

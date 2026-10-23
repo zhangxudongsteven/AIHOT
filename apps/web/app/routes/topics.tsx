@@ -1,3 +1,5 @@
+import { nonDefaultSpace, withSpaceMeta } from "../lib/seo";
+import { useSpace } from "../lib/space";
 import { useLoaderData } from "react-router";
 import { SITE, subjectAfter, withSubject } from "@aihot/site";
 import type { Route } from "./+types/topics";
@@ -18,19 +20,22 @@ export { pageHeaders as headers } from "../lib/api.server";
 export const { clientLoader, shouldRevalidate } = pageReuse<typeof loader>();
 
 export async function loader({ request }: { request: Request }) {
-  return cachedPage(300, await apiGet<TopicsResponse>("/api/site/topics", { signal: request.signal }));
+  return cachedPage(300, await apiGet<TopicsResponse>("/api/site/topics", { request, signal: request.signal }));
 }
 
-export function meta({ loaderData }: Route.MetaArgs) {
-  if (!loaderData) return pageMeta({ title: SITE.topicsTitle, path: "/topics", image: "/og/pages/topics.png" });
+function routeMeta(args: Route.MetaArgs) {
+  const { loaderData } = args;
+  const space = nonDefaultSpace(args);
+  const title = space ? `${space.name}主题` : SITE.topicsTitle;
+  if (!loaderData) return pageMeta({ title, path: "/topics", image: "/og/pages/topics.png" });
   const { groups, topics } = loaderData;
   const by = groups.map((g) => g.name).join("、");
   const indexed = topics.filter((t) => t.indexable);
   const named = indexed.slice(0, 6).map((t) => t.name.split(" / ")[0]).join("、");
   const base = siteUrl();
   return pageMeta({
-    title: SITE.topicsTitle,
-    description: `按${by}${subjectAfter("追踪", "最新动态")}：${named ? `${named}等 ` : ""}${topics.length} 个主题，浏览最新精选与重要进展，持续更新。`,
+    title,
+    description: `按${by || "主题"}${space ? "追踪最新动态" : subjectAfter("追踪", "最新动态")}：${named ? `${named}等 ` : ""}${topics.length} 个主题，浏览最新精选与重要进展，持续更新。`,
     path: "/topics",
     image: "/og/pages/topics.png",
     jsonLd: [
@@ -39,7 +44,7 @@ export function meta({ loaderData }: Route.MetaArgs) {
         "@type": "CollectionPage",
         "@id": `${base}/topics#collection`,
         url: `${base}/topics`,
-        name: withSubject("主题"),
+        name: space ? `${space.name}主题` : withSubject("主题"),
         inLanguage: SITE.locale,
         isPartOf: { "@id": `${base}/#website` },
         mainEntity: {
@@ -97,14 +102,15 @@ function TopicCard({ t }: { t: TopicSummary }) {
 }
 
 export default function TopicsPage() {
+  const { isDefault } = useSpace();
   const { groups, topics } = useLoaderData<typeof loader>();
   return (
     <div className="pb-10">
       <PhoneBar back={{ to: "/more", label: "我的" }} title="主题" />
       <header className="pb-2 pt-3 lg:pt-1">
-        <h1 data-page-title="" className="text-[24px] font-semibold leading-[1.3] text-ink">{subjectAfter("按主题看")}</h1>
+        <h1 data-page-title="" className="text-[24px] font-semibold leading-[1.3] text-ink">{isDefault ? subjectAfter("按主题看") : "按主题浏览"}</h1>
         <p className="mt-1.5 text-[13px] leading-relaxed text-ink-3">
-          {`按${groups.map((g) => g.name).join("、")}浏览 `}
+          {groups.length ? `按${groups.map((g) => g.name).join("、")}浏览 ` : "浏览 "}
           <span className="num">{topics.length}</span> 个主题，追踪最新精选与重要进展。
         </p>
       </header>
@@ -130,3 +136,5 @@ export default function TopicsPage() {
     </div>
   );
 }
+
+export const meta = withSpaceMeta(routeMeta);

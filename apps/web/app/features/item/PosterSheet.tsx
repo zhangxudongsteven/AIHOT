@@ -1,3 +1,5 @@
+import { useSpaceFetch } from "../../lib/space";
+import { useSpace } from "../../lib/space";
 // Share poster: the server-rendered poster (with a QR code to the article), to save or hand to the
 // system share sheet. Loaded on demand from the article page; a bottom sheet on phones, centred above.
 import { useEffect, useState } from "react";
@@ -6,7 +8,9 @@ import { Sheet } from "../../components/ui/Sheet";
 import { IconDownload, IconShare } from "../../components/icons";
 
 export default function PosterSheet({ id, title, open, onClose }: { id: string; title: string; open: boolean; onClose: () => void }) {
-  const src = `/og/posters/${id}.png`;
+  const spaceFetch = useSpaceFetch();
+  const { path } = useSpace();
+  const src = path(`/og/posters/${id}.png`);
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
   const [canShareFile, setCanShareFile] = useState(false);
@@ -22,7 +26,7 @@ export default function PosterSheet({ id, title, open, onClose }: { id: string; 
 
   async function share() {
     try {
-      const blob = await (await fetch(src)).blob();
+      const blob = await (await spaceFetch(src)).blob();
       await navigator.share({ files: [new File([blob], `${SITE.mcpPrefix}-${id}.png`, { type: "image/png" })], title });
     } catch {
       // cancelled or unsupported: saving stays available

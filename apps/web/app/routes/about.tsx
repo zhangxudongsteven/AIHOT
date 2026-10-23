@@ -1,6 +1,7 @@
+import { withSpaceMeta } from "../lib/seo";
 import { Fragment, useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import { IntentLink } from "../components/ui/IntentLink";
-import { Link, useLoaderData } from "react-router";
+import { Link, useLoaderData } from "../lib/space-router";
 import type { SiteContact, SiteStats } from "@aihot/contracts/site";
 import { ABOUT, POLICY, REPORTS, SITE, subjectAfter } from "@aihot/site";
 import { apiGet, cachedPage } from "../lib/api.server";
@@ -19,13 +20,13 @@ export const { clientLoader, shouldRevalidate } = pageReuse<typeof loader>();
 
 export async function loader({ request }: { request: Request }) {
   const [contact, stats] = await Promise.all([
-    apiGet<SiteContact>("/api/site/contact", { signal: request.signal }).catch(() => null),
-    apiGet<SiteStats>("/api/site/stats", { signal: request.signal }).catch(() => null),
+    apiGet<SiteContact>("/api/site/contact", { request, signal: request.signal }).catch(() => null),
+    apiGet<SiteStats>("/api/site/stats", { request, signal: request.signal }).catch(() => null),
   ]);
   return cachedPage(300, { contact, stats });
 }
 
-export function meta() {
+function routeMeta() {
   return pageMeta({ title: "关于", description: ABOUT.description, path: "/about", image: "/og/pages/about.png", jsonLd: organizationLd() });
 }
 
@@ -297,3 +298,5 @@ export default function AboutPage() {
     </div>
   );
 }
+
+export const meta = withSpaceMeta(routeMeta);

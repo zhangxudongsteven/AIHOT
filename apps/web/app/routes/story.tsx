@@ -1,6 +1,7 @@
+import { withSpaceMeta } from "../lib/seo";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { IntentLink } from "../components/ui/IntentLink";
-import { Link, useLoaderData, useLocation } from "react-router";
+import { Link, useLoaderData, useLocation } from "../lib/space-router";
 import type { Route } from "./+types/story";
 import type { StoryDetail, StoryReportView } from "@aihot/contracts/site";
 import { SITE } from "@aihot/site";
@@ -28,11 +29,11 @@ export { pageHeaders as headers } from "../lib/api.server";
 export const { clientLoader, shouldRevalidate } = pageReuse<typeof loader>();
 
 export async function loader({ params, request }: Route.LoaderArgs) {
-  const story = await loadOr404<StoryDetail>(`/api/site/stories/${encodeURIComponent(params.publicId)}`, { signal: request.signal, merged: (id) => `/story/${id}` });
+  const story = await loadOr404<StoryDetail>(`/api/site/stories/${encodeURIComponent(params.publicId)}`, { request, signal: request.signal, merged: (id) => `/story/${id}` });
   return cachedPage(300, { story });
 }
 
-export function meta({ loaderData }: Route.MetaArgs) {
+function routeMeta({ loaderData }: Route.MetaArgs) {
   if (!loaderData) return [{ title: titled("事件不存在") }, { name: "robots", content: "noindex" }];
   const s = loaderData.story;
   return pageMeta({
@@ -438,3 +439,5 @@ export default function StoryPage() {
     </div>
   );
 }
+
+export const meta = withSpaceMeta(routeMeta);

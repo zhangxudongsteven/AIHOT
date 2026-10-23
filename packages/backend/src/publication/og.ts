@@ -1,6 +1,9 @@
+import { publicationSpaceId } from "./context.ts";
+import { publicationCategoryLabel } from "./taxonomy.ts";
+import { spaceCondition } from "./scope.ts";
 // Share images only need public title/summary metadata. Keep the same page visibility rule without
 // loading bodies, translations, related stories or signed media that never appear on these cards.
-import { CATEGORY_LABELS, type CategoryKey } from '@aihot/contracts/taxonomy';
+import { type CategoryKey } from '@aihot/contracts/taxonomy';
 import { beijingDate } from '@aihot/contracts/time';
 import { ITEM_COPY, withSubject } from '@aihot/site';
 import type { OgCard } from '../media/og.ts';
@@ -13,7 +16,7 @@ export async function loadItemShare(id: string) {
     score: number | null; timeline_at: Date; source_name: string; source_mode: string; visibility: string;
   }[]>`SELECT p.article_id AS id, p.title, p.summary, p.category, p.selected, p.score, p.timeline_at,
       s.name AS source_name, s.participation_mode AS source_mode, p.visibility
-    FROM publications p JOIN sources s ON s.id = p.source_id WHERE p.article_id = ${id}`;
+    FROM publications p JOIN sources s ON s.id = p.source_id WHERE ${spaceCondition()} AND p.article_id = ${id}`;
   if (!row || !hasItemPage({ visibility: row.visibility, sourceMode: row.source_mode })) return null;
   const summaryOnly = row.visibility === 'summary-only';
   return { id: row.id, title: row.title, summary: row.summary, category: summaryOnly ? null : row.category, selected: !summaryOnly && row.selected,
@@ -26,7 +29,7 @@ export async function loadItemOgCard(id: string): Promise<OgCard | null> {
   const item = await loadItemShare(id);
   if (!item) return null;
   return {
-    kicker: item.category ? CATEGORY_LABELS[item.category] : withSubject('动态'),
+    kicker: item.category ? publicationCategoryLabel(item.category) ?? item.category : publicationSpaceId() === 'default' ? withSubject('动态') : '动态',
     title: item.title,
     subtitle: item.summary,
     meta: `${item.source.name} · ${beijingDate(item.timelineAt)}`,

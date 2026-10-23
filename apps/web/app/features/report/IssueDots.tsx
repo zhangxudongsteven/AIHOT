@@ -4,7 +4,7 @@
 // on a canvas in the same dot language as the nameplate; the archive column is the accessible way
 // to the same issues.
 import { useEffect, useMemo, useRef } from "react";
-import { useNavigate } from "react-router";
+import { useNavigate } from "../../lib/space-router";
 import type { ReportNavigationEntry, ReportKind } from "@aihot/contracts/site";
 import { watchAppearance } from "../../lib/local-state";
 import { reducedMotion } from "../../lib/motion";

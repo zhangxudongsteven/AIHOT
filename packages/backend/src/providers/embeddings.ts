@@ -3,6 +3,7 @@
 // Aliyun text-embedding-v4 at 1024 dimensions. Without either, recall compares the texts themselves.
 import { config, credential } from "../config.ts";
 import { sql } from "../db.ts";
+import { resolveSpaceContext, type SpaceContext } from "../spaces/context.ts";
 import { sha256 } from "../lib/ids.ts";
 import { z } from "zod";
 import { assertAccepted, completeReceipt, ModelOutputError, ModelUnavailableError, paidRequest, rejectReceivedResponse } from "./receipts.ts";
@@ -20,13 +21,13 @@ export function embeddingsAvailable(): boolean {
   return config.modelCallsEnabled && !!(credential("models", "EMBEDDING_API_KEY") ?? credential("models", "DASHSCOPE_API_KEY"));
 }
 
-async function embedBatch(texts: string[], subject: string): Promise<{ vectors: number[][]; receiptId: number }> {
+async function embedBatch(texts: string[], subject: string, context?: SpaceContext): Promise<{ vectors: number[][]; receiptId: number }> {
   if (!config.modelCallsEnabled) throw new ModelUnavailableError("Model calls are disabled (MODEL_CALLS_ENABLED=false)");
   const base = own ? credential("models", "EMBEDDING_BASE_URL") ?? "https://api.openai.com/v1" : credential("models", "DASHSCOPE_BASE_URL") ?? "https://dashscope.aliyuncs.com/compatible-mode/v1";
   const key = own ? credential("models", "EMBEDDING_API_KEY") : credential("models", "DASHSCOPE_API_KEY");
   if (!key) throw new ModelUnavailableError("EMBEDDING_API_KEY (or DASHSCOPE_API_KEY) missing");
   const receipt = await paidRequest(
-    { service: SERVICE, model: EMBEDDING_MODEL, purpose: "embedding", subject, identity: { model: EMBEDDING_MODEL, dims: EMBEDDING_DIMS, texts: texts.map((t) => sha256(t)) }, requestSummary: { count: texts.length } },
+    { context, service: SERVICE, model: EMBEDDING_MODEL, purpose: "embedding", subject, identity: { model: EMBEDDING_MODEL, dims: EMBEDDING_DIMS, texts: texts.map((t) => sha256(t)) }, requestSummary: { count: texts.length } },
     async () => {
       const res = await fetch(`${base.replace(/\/$/, "")}/embeddings`, {
         method: "POST",
@@ -71,9 +72,14 @@ function storedVector(data: Buffer): number[] | null {
 }
 
 /** Returns the stored embeddings of report texts, computing and storing the missing ones. */
-export async function ensureEmbeddings(items: Array<{ id: string; text: string }>): Promise<Map<string, number[]>> {
+export async function ensureEmbeddings(items: Array<{ id: string; text: string }>, context?: SpaceContext): Promise<Map<string, number[]>> {
   const out = new Map<string, number[]>();
   if (items.length === 0) return out;
+  if (context) {
+    await resolveSpaceContext(context.spaceId, context.configVersion);
+    const owned = await sql<{ id: string }[]>`SELECT id FROM articles WHERE id IN ${sql(items.map(i => i.id))} AND space_id = ${context.spaceId}`;
+    if (owned.length !== new Set(items.map(i => i.id)).size) throw new Error("Embedding items do not belong to the requested space");
+  }
   const hashes = new Map(items.map((item) => [item.id, sha256(item.text)]));
   const rows = await sql<{ ref_id: string; text_hash: string; vector: Buffer }[]>`
     SELECT ref_id, text_hash, array_send(vector) AS vector FROM embeddings WHERE kind = 'article' AND model = ${EMBEDDING_MODEL} AND ref_id IN ${sql(items.map((i) => i.id))}`;
@@ -89,7 +95,7 @@ export async function ensureEmbeddings(items: Array<{ id: string; text: string }
   });
   for (let i = 0; i < missing.length; i += 10) {
     const batch = missing.slice(i, i + 10);
-    const { vectors, receiptId } = await embedBatch(batch.map((b) => b.text.slice(0, 2000)), `article:${batch[0]!.id}`);
+    const { vectors, receiptId } = await embedBatch(batch.map((b) => b.text.slice(0, 2000)), `article:${batch[0]!.id}`, context);
     await sql.begin(async (tx) => {
       for (let j = 0; j < batch.length; j++) {
         const item = batch[j]!;

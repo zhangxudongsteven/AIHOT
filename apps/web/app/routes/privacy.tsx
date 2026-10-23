@@ -1,3 +1,4 @@
+import { withSpaceMeta } from "../lib/seo";
 import { POLICY, SITE } from "@aihot/site";
 import copy from "@aihot/site/pages/privacy.md?raw";
 import { edgeTtl } from "../lib/api.server";
@@ -14,7 +15,7 @@ export function headers() {
   return edgeTtl(300);
 }
 
-export function meta() {
+function routeMeta() {
   return pageMeta({ title: "隐私说明", description: POLICY.privacy.description, path: "/privacy", image: "/og/pages/privacy.png" });
 }
 
@@ -28,3 +29,5 @@ export default function PrivacyPage() {
     />
   );
 }
+
+export const meta = withSpaceMeta(routeMeta);

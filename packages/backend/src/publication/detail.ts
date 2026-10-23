@@ -1,3 +1,5 @@
+import { publicationSpaceId, publicationSpace, publicationConfig } from "./context.ts";
+import { spaceCondition } from "./scope.ts";
 // Item detail and Markdown export, both behind the same visibility and licence rules.
 import type { OutlineEntry, SiteItemDetail, StoryRef } from "@aihot/contracts/site";
 import { ITEM_COPY, SITE } from "@aihot/site";
@@ -44,7 +46,7 @@ async function loadRow(id: string): Promise<DetailRow | null> {
     SELECT ${ITEM_COLUMNS}, a.body_html, a.body_text, a.body_status, tr.body_html AS tr_html, tr.complete AS tr_complete,
       ${topicMembership()} AS topics
     ${ITEM_FROM}
-    WHERE p.article_id = ${id}`;
+    WHERE ${spaceCondition()} AND p.article_id = ${id}`;
   return row ?? null;
 }
 
@@ -109,7 +111,7 @@ export async function loadItemDetail(id: string, language: "zh" | "original" = "
   const related = await sql<StoryRef[]>`
     SELECT DISTINCT st.public_id::text AS "publicId", st.title
     FROM fact_articles fa JOIN facts f ON f.id = fa.fact_id JOIN stories st ON st.id = f.story_id
-    WHERE fa.article_id = ${id} AND fa.role <> 'mention' AND st.merged_into IS NULL
+    WHERE st.space_id = ${publicationSpaceId()} AND fa.article_id = ${id} AND fa.role <> 'mention' AND st.merged_into IS NULL
     ORDER BY "publicId" LIMIT 6`;
 
   let x: SiteItemDetail["x"] = null;
@@ -187,10 +189,10 @@ export async function exportMarkdown(id: string): Promise<{ filename: string; bo
   lines.push(`- 来源：${publicSourceName(row.source_name)}`);
   // Without a reliable date from the original, the time it was collected says so.
   lines.push(row.published_at ? `- 发布时间：${row.published_at.toISOString()}` : `- 收录时间：${row.discovered_at.toISOString()}`);
-  lines.push(`- ${SITE.name}：${itemUrl(row.id)}`);
+  lines.push(`- ${publicationSpace()?.name ?? publicationConfig()?.siteName ?? SITE.name}：${itemUrl(row.id)}`);
   lines.push(`- 原文：${row.url}`, "");
   if (row.summary) lines.push("## 摘要", "", row.summary, "");
-  if (row.selected && row.seat && row.reason) lines.push(`## ${ITEM_COPY.reasonLabel}`, "", row.reason, "");
+  if (row.selected && row.seat && row.reason) lines.push(`## ${publicationConfig()?.reasonLabel ?? ITEM_COPY.reasonLabel}`, "", row.reason, "");
   if (showsPost(row) && row.x_post) {
     const post = xView(row);
     if (post?.text) lines.push("## 正文", "", post.text, "");

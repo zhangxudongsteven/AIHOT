@@ -1,3 +1,4 @@
+import { withSpaceMeta } from "../lib/seo";
 import { useEffect, useState, type ComponentType } from "react";
 import { IntentLink } from "../components/ui/IntentLink";
 import type { ChangelogRelease, ChangelogResponse } from "@aihot/contracts/site";
@@ -20,10 +21,10 @@ export const { clientLoader, shouldRevalidate } = pageReuse<typeof loader>();
 type Release = ChangelogRelease;
 
 export async function loader({ request }: { request: Request }) {
-  return cachedPage(300, await apiGet<ChangelogResponse>("/api/site/changelog", { signal: request.signal }));
+  return cachedPage(300, await apiGet<ChangelogResponse>("/api/site/changelog", { request, signal: request.signal }));
 }
 
-export function meta() {
+function routeMeta() {
   return pageMeta({ title: "更新日志", description: `${SITE.name} 的功能更新、优化、公告与下线记录。`, path: "/changelog", image: "/og/pages/changelog.png" });
 }
 
@@ -197,3 +198,5 @@ export default function ChangelogPage() {
     </>
   );
 }
+
+export const meta = withSpaceMeta(routeMeta);

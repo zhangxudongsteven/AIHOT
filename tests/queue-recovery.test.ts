@@ -1,10 +1,11 @@
 import "./setup.ts";
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
+import { closeDb } from "@aihot/backend/db";
 import { config } from "@aihot/backend/config";
 import { getBoss, enqueue, QUEUES, stopBoss } from "@aihot/backend/jobs/queue";
 
-after(stopBoss);
+after(async () => { await stopBoss(); await closeDb(); });
 
 test("a failed first database connection does not poison all later queue requests", async () => {
   const original = config.databaseUrl;

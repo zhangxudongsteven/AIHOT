@@ -3,7 +3,7 @@
   "info": {
     "title": "{{siteName}} Public API",
     "version": "{{version}}",
-    "description": "Anonymous, read-only API for clients and Agents. No API key is required.\n\nPicking an endpoint: answer a person's question inside an AI agent -> read /api/v1/agent, which lists Markdown addresses made for agents. Show recent or today's items -> /api/v1/items. Show what is trending right now -> /api/v1/hot-topics. Show the daily digest -> /api/v1/dailies/latest; the weekly and monthly reports -> /api/v1/weeklies/latest and /api/v1/monthlies/latest. Keep a complete local copy of the selected set -> /api/v1/selected/snapshot once, then /api/v1/selected/changes forever.\n\nHow often to poll: use each response's Cache-Control s-maxage as the minimum interval, and always send If-None-Match: an unchanged resource answers 304 with an empty body. On 429 or 503, honour Retry-After. There is no push channel (no SSE, webhooks or streaming): poll on an interval.\n\nKeep responses small: send Accept-Encoding: gzip or br (curl --compressed). To follow new items, page back only until you reach an id you already have instead of re-reading the whole 7-day window on every poll; to keep every selected item, read /api/v1/selected/snapshot once and then only /api/v1/selected/changes.\n\nReport dates, weeks and months identify fixed editions, but corrections and withdrawn citations can change their public content. Revalidate retained copies with If-None-Match after Cache-Control expires; do not treat a dated report as immutable.\n\nTitles and summaries are generated from third-party sources; the original is always linked in links.original.",
+    "description": "{{channelScope}}\n\nAnonymous, read-only API for clients and Agents. No API key is required.\n\nPicking an endpoint: answer a person's question inside an AI agent -> read {{apiBase}}/agent, which lists Markdown addresses made for agents. Show recent or today's items -> {{apiBase}}/items. Show what is trending right now -> {{apiBase}}/hot-topics. Show the daily digest -> {{apiBase}}/dailies/latest; the weekly and monthly reports -> {{apiBase}}/weeklies/latest and {{apiBase}}/monthlies/latest. Keep a complete local copy of the selected set -> {{apiBase}}/selected/snapshot once, then {{apiBase}}/selected/changes forever.\n\nHow often to poll: use each response's Cache-Control s-maxage as the minimum interval, and always send If-None-Match: an unchanged resource answers 304 with an empty body. On 429 or 503, honour Retry-After. There is no push channel (no SSE, webhooks or streaming): poll on an interval.\n\nKeep responses small: send Accept-Encoding: gzip or br (curl --compressed). To follow new items, page back only until you reach an id you already have instead of re-reading the whole 7-day window on every poll; to keep every selected item, read {{apiBase}}/selected/snapshot once and then only {{apiBase}}/selected/changes.\n\nReport dates, weeks and months identify fixed editions, but corrections and withdrawn citations can change their public content. Revalidate retained copies with If-None-Match after Cache-Control expires; do not treat a dated report as immutable.\n\nTitles and summaries are generated from third-party sources; the original is always linked in links.original.",
     "termsOfService": "{{siteUrl}}/terms"
   },
   "servers": [
@@ -13,14 +13,14 @@
   ],
   "externalDocs": {
     "description": "Machine-readable OpenAPI document",
-    "url": "{{siteUrl}}/openapi-v1.json"
+    "url": "{{siteUrl}}{{openapiPath}}"
   },
   "paths": {
-    "/api/v1/items": {
+    "{{apiBase}}/items": {
       "get": {
         "operationId": "items",
-        "summary": "List recent public AI items",
-        "description": "Start here for feeds, widgets and 'what is new' views. Covers the last 7 days only. Send If-None-Match and you get a 304 with an empty body whenever nothing changed. To follow new items, page back with cursor only until you reach an id you already have. Do not use this to maintain a complete local copy of the selected set: it is windowed, so anything older than 7 days silently falls out. Use /api/v1/selected/snapshot plus /api/v1/selected/changes for that.",
+        "summary": "List recent public items",
+        "description": "Start here for feeds, widgets and 'what is new' views. Covers the last 7 days only. Send If-None-Match and you get a 304 with an empty body whenever nothing changed. To follow new items, page back with cursor only until you reach an id you already have. Do not use this to maintain a complete local copy of the selected set: it is windowed, so anything older than 7 days silently falls out. Use {{apiBase}}/selected/snapshot plus {{apiBase}}/selected/changes for that.",
         "parameters": [
           {
             "$ref": "#/components/parameters/ActorUserAgent"
@@ -250,11 +250,11 @@
         }
       }
     },
-    "/api/v1/hot-topics": {
+    "{{apiBase}}/hot-topics": {
       "get": {
         "operationId": "hotTopics",
         "summary": "List current multi-source hot topics",
-        "description": "The current {{siteName}} Top 10, ranked by multi-source coverage and discussion heat. Each item includes a one-based rank; internal and display heat values are not returned. Uses the latest successfully published ranking, normally refreshed every five minutes. Shared caches use a 60s freshness window; poll no faster than s-maxage and use If-None-Match. If an item includes links.story, it is a human-facing HTML URL: extract its final publicId path segment and call /api/v1/stories/{publicId} for timeline JSON. Never request links.story as an API. When absent, do not construct a story id.",
+        "description": "The current {{siteName}} Top 10, ranked by multi-source coverage and discussion heat. Each item includes a one-based rank; internal and display heat values are not returned. Uses the latest successfully published ranking, normally refreshed every five minutes. Shared caches use a 60s freshness window; poll no faster than s-maxage and use If-None-Match. If an item includes links.story, it is a human-facing HTML URL: extract its final publicId path segment and call {{apiBase}}/stories/{publicId} for timeline JSON. Never request links.story as an API. When absent, do not construct a story id.",
         "responses": {
           "200": {
             "description": "OK",
@@ -408,7 +408,7 @@
         ]
       }
     },
-    "/api/v1/stories/{publicId}": {
+    "{{apiBase}}/stories/{publicId}": {
       "get": {
         "operationId": "storyByPublicId",
         "summary": "Get a story (event) with its coverage timeline and AI digest",
@@ -596,7 +596,7 @@
         }
       }
     },
-    "/api/v1/dailies": {
+    "{{apiBase}}/dailies": {
       "get": {
         "operationId": "dailies",
         "summary": "List daily-report archive entries",
@@ -764,11 +764,11 @@
         }
       }
     },
-    "/api/v1/dailies/latest": {
+    "{{apiBase}}/dailies/latest": {
       "get": {
         "operationId": "latestDaily",
         "summary": "Get the latest daily report",
-        "description": "The most recent daily report, published once a day at {{dailyTime}} Asia/Shanghai. A client that only wants the daily digest should wake up shortly after {{dailyTime}} rather than poll around the clock. Agent or tool runtimes that cache a stable URL beyond HTTP cache headers should first request /api/v1/dailies?limit=1 and then fetch /api/v1/dailies/{returned-date}; never guess a date.",
+        "description": "The most recent daily report, published once a day at {{dailyTime}} Asia/Shanghai. A client that only wants the daily digest should wake up shortly after {{dailyTime}} rather than poll around the clock. Agent or tool runtimes that cache a stable URL beyond HTTP cache headers should first request {{apiBase}}/dailies?limit=1 and then fetch {{apiBase}}/dailies/{returned-date}; never guess a date.",
         "responses": {
           "200": {
             "description": "OK",
@@ -940,7 +940,7 @@
         ]
       }
     },
-    "/api/v1/dailies/{date}": {
+    "{{apiBase}}/dailies/{date}": {
       "get": {
         "operationId": "dailyByDate",
         "summary": "Get a daily report by Shanghai calendar date",
@@ -1125,7 +1125,7 @@
         }
       }
     },
-    "/api/v1/weeklies": {
+    "{{apiBase}}/weeklies": {
       "get": {
         "operationId": "weeklies",
         "summary": "List weekly reports",
@@ -1293,11 +1293,11 @@
         }
       }
     },
-    "/api/v1/weeklies/latest": {
+    "{{apiBase}}/weeklies/latest": {
       "get": {
         "operationId": "latestWeekly",
         "summary": "Get the latest weekly report",
-        "description": "The most recent weekly report: its headline, overview and the week's most important items grouped by section, chosen from that week's dailies. Published each Monday at {{weeklyTime}} Asia/Shanghai; a client that wants the weekly digest should fetch it shortly after that rather than poll. Agent or tool runtimes that cache a stable URL beyond HTTP cache headers should first request /api/v1/weeklies?limit=1 and then /api/v1/weeklies/{returned-week}; never guess a week.",
+        "description": "The most recent weekly report: its headline, overview and the week's most important items grouped by section, chosen from that week's dailies. Published each Monday at {{weeklyTime}} Asia/Shanghai; a client that wants the weekly digest should fetch it shortly after that rather than poll. Agent or tool runtimes that cache a stable URL beyond HTTP cache headers should first request {{apiBase}}/weeklies?limit=1 and then {{apiBase}}/weeklies/{returned-week}; never guess a week.",
         "responses": {
           "200": {
             "description": "OK",
@@ -1469,7 +1469,7 @@
         ]
       }
     },
-    "/api/v1/weeklies/{week}": {
+    "{{apiBase}}/weeklies/{week}": {
       "get": {
         "operationId": "weeklyByWeek",
         "summary": "Get a weekly report by ISO week",
@@ -1655,7 +1655,7 @@
         }
       }
     },
-    "/api/v1/monthlies": {
+    "{{apiBase}}/monthlies": {
       "get": {
         "operationId": "monthlies",
         "summary": "List monthly reports",
@@ -1823,11 +1823,11 @@
         }
       }
     },
-    "/api/v1/monthlies/latest": {
+    "{{apiBase}}/monthlies/latest": {
       "get": {
         "operationId": "latestMonthly",
         "summary": "Get the latest monthly report",
-        "description": "The most recent monthly report: its headline, overview and the month's most important items grouped by section, chosen from that month's dailies. Published on the 1st of each month at {{monthlyTime}} Asia/Shanghai. Tool runtimes that cache a stable URL should first request /api/v1/monthlies?limit=1 and then /api/v1/monthlies/{returned-month}; never guess a month.",
+        "description": "The most recent monthly report: its headline, overview and the month's most important items grouped by section, chosen from that month's dailies. Published on the 1st of each month at {{monthlyTime}} Asia/Shanghai. Tool runtimes that cache a stable URL should first request {{apiBase}}/monthlies?limit=1 and then {{apiBase}}/monthlies/{returned-month}; never guess a month.",
         "responses": {
           "200": {
             "description": "OK",
@@ -1999,7 +1999,7 @@
         ]
       }
     },
-    "/api/v1/monthlies/{month}": {
+    "{{apiBase}}/monthlies/{month}": {
       "get": {
         "operationId": "monthlyByMonth",
         "summary": "Get a monthly report by month",
@@ -2185,11 +2185,11 @@
         }
       }
     },
-    "/api/v1/selected/snapshot": {
+    "{{apiBase}}/selected/snapshot": {
       "get": {
         "operationId": "selectedSnapshot",
         "summary": "Fetch the current selected-item snapshot, one page at a time",
-        "description": "One-time bootstrap for clients that keep a complete local copy of the selected set. Not a browsing endpoint and not something to poll: page through it once with limit (default 500, max 1000) until hasMore is false, keep the cursor from the FIRST page, then stay current with /api/v1/selected/changes. The full set runs to several thousand items and only grows; fields=minimal keeps the bootstrap small. A widget that just shows today's picks does not need this at all — use /api/v1/items.",
+        "description": "One-time bootstrap for clients that keep a complete local copy of the selected set. Not a browsing endpoint and not something to poll: page through it once with limit (default 500, max 1000) until hasMore is false, keep the cursor from the FIRST page, then stay current with {{apiBase}}/selected/changes. The full set runs to several thousand items and only grows; fields=minimal keeps the bootstrap small. A widget that just shows today's picks does not need this at all — use {{apiBase}}/items.",
         "parameters": [
           {
             "$ref": "#/components/parameters/ActorUserAgent"
@@ -2226,7 +2226,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "Opaque continuation cursor from the previous response's nextPage. Keep requesting pages while hasMore is true; only after the last page should you use cursor against /api/v1/selected/changes. The sync cursor is identical on every page and always refers to the watermark taken on the first page, so items changed mid-pagination are reconciled by the first changes call."
+            "description": "Opaque continuation cursor from the previous response's nextPage. Keep requesting pages while hasMore is true; only after the last page should you use cursor against {{apiBase}}/selected/changes. The sync cursor is identical on every page and always refers to the watermark taken on the first page, so items changed mid-pagination are reconciled by the first changes call."
           }
         ],
         "responses": {
@@ -2392,11 +2392,11 @@
         }
       }
     },
-    "/api/v1/selected/changes": {
+    "{{apiBase}}/selected/changes": {
       "get": {
         "operationId": "selectedChanges",
         "summary": "Fetch atomic selected-item changes",
-        "description": "Adds, edits and removals since your cursor, so a local copy stays correct without re-downloading anything. Apply a page, then save the returned cursor — never the other way round. The cursor is a ledger watermark, not a session: it does not expire on a timer, so a client may go offline for days and resume exactly where it stopped. On 409 snapshot_required, re-bootstrap from /api/v1/selected/snapshot; that response is the only signal that resuming is no longer safe.",
+        "description": "Adds, edits and removals since your cursor, so a local copy stays correct without re-downloading anything. Apply a page, then save the returned cursor — never the other way round. The cursor is a ledger watermark, not a session: it does not expire on a timer, so a client may go offline for days and resume exactly where it stopped. On 409 snapshot_required, re-bootstrap from {{apiBase}}/selected/snapshot; that response is the only signal that resuming is no longer safe.",
         "parameters": [
           {
             "$ref": "#/components/parameters/ActorUserAgent"
@@ -2586,11 +2586,11 @@
         }
       }
     },
-    "/api/v1/agent": {
+    "{{apiBase}}/agent": {
       "get": {
         "operationId": "agentGuide",
         "summary": "Usage guide for AI agents",
-        "description": "Markdown that tells an AI agent which /api/v1/agent address answers which kind of question, how to present results and the usage rules. Agents read these addresses and never need updating: new abilities are added here as new addresses.",
+        "description": "Markdown that tells an AI agent which {{apiBase}}/agent address answers which kind of question, how to present results and the usage rules. Agents read these addresses and never need updating: new abilities are added here as new addresses.",
         "parameters": [
           {
             "$ref": "#/components/parameters/ActorUserAgent"
@@ -2624,11 +2624,11 @@
         }
       }
     },
-    "/api/v1/agent/latest": {
+    "{{apiBase}}/agent/latest": {
       "get": {
         "operationId": "agentLatest",
         "summary": "Latest items as an agent answer",
-        "description": "The same items as /api/v1/items (timeline order), rendered for an agent to relay: titles linked to {{siteName}}, source, Beijing time, summary and reason. Defaults to the editorial picks of the past 24 hours, 10 items.",
+        "description": "The same items as {{apiBase}}/items (timeline order), rendered for an agent to relay: titles linked to {{siteName}}, source, Beijing time, summary and reason. Defaults to the editorial picks of the past 24 hours, 10 items.",
         "parameters": [
           {
             "$ref": "#/components/parameters/ActorUserAgent"
@@ -2706,7 +2706,7 @@
         }
       }
     },
-    "/api/v1/agent/search": {
+    "{{apiBase}}/agent/search": {
       "get": {
         "operationId": "agentSearch",
         "summary": "Search as an agent answer",
@@ -2786,7 +2786,7 @@
         }
       }
     },
-    "/api/v1/agent/hot": {
+    "{{apiBase}}/agent/hot": {
       "get": {
         "operationId": "agentHot",
         "summary": "Current hot topics as an agent answer",
@@ -2834,11 +2834,11 @@
         }
       }
     },
-    "/api/v1/agent/stories/{publicId}": {
+    "{{apiBase}}/agent/stories/{publicId}": {
       "get": {
         "operationId": "agentStory",
         "summary": "A story's timeline as an agent answer",
-        "description": "Latest development, AI digest, reports from newest to oldest and related stories. Only use addresses given by /api/v1/agent/hot or another story answer.",
+        "description": "Latest development, AI digest, reports from newest to oldest and related stories. Only use addresses given by {{apiBase}}/agent/hot or another story answer.",
         "parameters": [
           {
             "$ref": "#/components/parameters/ActorUserAgent"
@@ -2894,7 +2894,7 @@
         }
       }
     },
-    "/api/v1/agent/daily": {
+    "{{apiBase}}/agent/daily": {
       "get": {
         "operationId": "agentLatestDaily",
         "summary": "The latest daily report as an agent answer",
@@ -2934,7 +2934,7 @@
         }
       }
     },
-    "/api/v1/agent/daily/{date}": {
+    "{{apiBase}}/agent/daily/{date}": {
       "get": {
         "operationId": "agentDaily",
         "summary": "A dated daily report as an agent answer",
@@ -2984,7 +2984,7 @@
         }
       }
     },
-    "/api/v1/agent/weekly": {
+    "{{apiBase}}/agent/weekly": {
       "get": {
         "operationId": "agentWeekly",
         "summary": "The latest weekly report as an agent answer",
@@ -3025,7 +3025,7 @@
         "description": "The most recent weekly report in Chinese Markdown: headline, overview and the week's most important items by section, with answering hints."
       }
     },
-    "/api/v1/agent/weekly/{week}": {
+    "{{apiBase}}/agent/weekly/{week}": {
       "get": {
         "operationId": "agentWeeklyByWeek",
         "summary": "A weekly report as an agent answer",
@@ -3076,7 +3076,7 @@
         }
       }
     },
-    "/api/v1/agent/monthly": {
+    "{{apiBase}}/agent/monthly": {
       "get": {
         "operationId": "agentMonthly",
         "summary": "The latest monthly report as an agent answer",
@@ -3117,7 +3117,7 @@
         "description": "The most recent monthly report in Chinese Markdown: headline, overview and the month's most important items by section, with answering hints."
       }
     },
-    "/api/v1/agent/monthly/{month}": {
+    "{{apiBase}}/agent/monthly/{month}": {
       "get": {
         "operationId": "agentMonthlyByMonth",
         "summary": "A monthly report as an agent answer",
@@ -3501,7 +3501,7 @@
               "string",
               "null"
             ],
-            "description": "Reader-facing recommendation reason, the same text shown as 推荐理由 on the website. Always present on /api/v1/items; null when the item is not selected or has no reader-facing reason. Selected snapshot and changes do not include this field yet."
+            "description": "Reader-facing recommendation reason, the same text shown as 推荐理由 on the website. Always present on {{apiBase}}/items; null when the item is not selected or has no reader-facing reason. Selected snapshot and changes do not include this field yet."
           },
           "attribution": {
             "$ref": "#/components/schemas/Attribution"
@@ -3747,7 +3747,7 @@
               "story": {
                 "type": "string",
                 "format": "uri",
-                "description": "Optional human-facing HTML URL. Extract its final publicId path segment and call /api/v1/stories/{publicId} for JSON; never request this URL as an API. Do not construct story ids when absent."
+                "description": "Optional human-facing HTML URL. Extract its final publicId path segment and call {{apiBase}}/stories/{publicId} for JSON; never request this URL as an API. Do not construct story ids when absent."
               }
             }
           },

@@ -1,8 +1,11 @@
 // First-party site API (/api/site/*). Not public, not versioned, never called /api/v2.
 // Reads through the same public read layer as v1; no cookies are read or set.
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { isCategoryKey, isChannelKey, type CategoryKey, type ChannelKey } from "@aihot/contracts/taxonomy";
+import { isChannelKey, type CategoryKey, type ChannelKey } from "@aihot/contracts/taxonomy";
 import type { ReportIndexResponse, ReportLatestPage, ReportNavigationResponse, SearchSuggestions, SiteContact } from "@aihot/contracts/site";
+import { publicationApiPath, publicationSpace } from "@aihot/backend/publication/context";
+import { listPublicSpaces } from "@aihot/backend/publication/spaces";
+import { publicationCategories, publicationCategoryKeys } from "@aihot/backend/publication/taxonomy";
 import { InvalidCursorError } from "@aihot/backend/lib/cursor";
 import { exportMarkdown, loadItemDetail } from "@aihot/backend/publication/detail";
 import { loadPool, SearchBusyError } from "@aihot/backend/publication/pool";
@@ -17,7 +20,7 @@ import { itemAvailability } from "@aihot/backend/publication/availability";
 import { listTopicSummaries, loadTopicPage, topicBrowseLinks } from "@aihot/backend/publication/topics";
 import { registerFeedback } from "./feedback.ts";
 import { loadHot, loadStoryDetail, resolveStory } from "@aihot/backend/publication/stories";
-import { listReports, loadReport, reportNavigation, loadReportNavigation, loadReportMonth, type ReportKind } from "@aihot/backend/publication/reports";
+import { listReports, loadReport, reportNavigation, loadReportNavigation, loadReportMonth, publicReportSettings, type ReportKind } from "@aihot/backend/publication/reports";
 import { looseQuery, QueryError, sendJsonWithEtag, sendProblem } from "../http/respond.ts";
 
 type Handler = (req: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
@@ -51,14 +54,14 @@ export function parseFilters(q: Record<string, string>): FilterParams {
   const channel = q.channel ?? "all";
   if (!isChannelKey(channel)) throw new BadRequest("invalid channel");
   const category = q.category ?? null;
-  if (category !== null && !isCategoryKey(category)) throw new BadRequest("invalid category");
+  if (category !== null && !publicationCategoryKeys().includes(category)) throw new BadRequest("invalid category");
   const tag = q.tag?.trim() ? q.tag.trim().slice(0, 60) : null;
   return { channel, category: category as CategoryKey | null, tag };
 }
 
-export function registerSite(app: FastifyInstance) {
+export function registerSite(app: FastifyInstance, includeFeedback = true) {
   app.get("/api/site/meta", siteHandler(async (req, reply) => {
-    return sendJsonWithEtag(req, reply, siteMeta(), { etagPrefix: "meta", cacheControl: "public, max-age=60, s-maxage=60" });
+    return sendJsonWithEtag(req, reply, { ...siteMeta(), space: publicationSpace(), spaces: await listPublicSpaces(), categories: publicationCategories().map(({ key, label, section, tagColor }) => ({ key, label, section, tagColor })), reportSettings: publicReportSettings() }, { etagPrefix: "meta", cacheControl: "public, max-age=60, s-maxage=60" });
   }));
 
   app.get("/api/site/timeline", siteHandler(async (req, reply) => {
@@ -148,7 +151,7 @@ export function registerSite(app: FastifyInstance) {
     return sendJsonWithEtag(req, reply, data, { etagPrefix: "topic", cacheControl: "public, max-age=60, s-maxage=60" });
   }));
 
-  registerFeedback(app);
+  if (includeFeedback) registerFeedback(app);
 
   app.get("/api/site/hot", siteHandler(async (req, reply) => {
     const data = await loadHot();
@@ -159,7 +162,7 @@ export function registerSite(app: FastifyInstance) {
     const publicId = (req.params as { publicId: string }).publicId;
     const found = await resolveStory(publicId);
     if (found.kind === "merged") {
-      return reply.code(308).header("Location", `/api/site/stories/${found.target}`).header("Cache-Control", "public, max-age=300").send({ mergedInto: found.target });
+      return reply.code(308).header("Location", publicationApiPath(`/api/site/stories/${found.target}`)).header("Cache-Control", "public, max-age=300").send({ mergedInto: found.target });
     }
     if (found.kind === "not_found") return sendProblem(req, reply, { status: 404, code: "not_found", detail: "story not found", cacheControl: "public, max-age=60" });
     const data = await loadStoryDetail(found.storyId);

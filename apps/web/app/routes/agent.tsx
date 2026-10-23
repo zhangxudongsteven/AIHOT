@@ -1,6 +1,9 @@
+import { useSpace } from "../lib/space";
+import { SpaceGuide } from "../features/agent/SpaceGuide";
+import { withSpaceMeta } from "../lib/seo";
 import { useEffect, useState } from "react";
 import { IntentLink } from "../components/ui/IntentLink";
-import { useLoaderData, useNavigate, useSearchParams } from "react-router";
+import { useLoaderData, useNavigate, useSearchParams } from "../lib/space-router";
 import type { Route } from "./+types/agent";
 import { PUBLIC_INTERFACE_VERSION } from "@aihot/contracts/http-policy";
 import { SITE } from "@aihot/site";
@@ -75,7 +78,7 @@ export const { clientLoader, shouldRevalidate } = pageReuse<typeof loader>((url)
   return url.pathname + (params.size ? `?${params}` : "");
 });
 
-export function meta({ location }: Route.MetaArgs) {
+function routeMeta({ location }: Route.MetaArgs) {
   const tab = tabKey(new URLSearchParams(location.search).get('tab'));
   const path = listPath("/agent", { tab: tab !== FIRST ? tab : null });
   return pageMeta({
@@ -87,6 +90,7 @@ export function meta({ location }: Route.MetaArgs) {
 }
 
 export default function AgentPage() {
+  const { slug } = useSpace();
   const { healthy, base, now } = useLoaderData<typeof loader>();
   const [params] = useSearchParams();
   const navigate = useNavigate();
@@ -109,6 +113,8 @@ export default function AgentPage() {
     document.getElementById(target)?.scrollIntoView({ block: "start" });
     setTarget(null);
   }, [target, tab]);
+
+  if (slug) return <SpaceGuide base={base} healthy={healthy} />;
 
   const select = (key: string) => {
     if (key === tab) return;
@@ -229,3 +235,5 @@ export default function AgentPage() {
     </>
   );
 }
+
+export const meta = withSpaceMeta(routeMeta);

@@ -1,5 +1,7 @@
+import { useSpace } from "../lib/space";
+import { withSpaceMeta } from "../lib/seo";
 import { useEffect, useState, type ReactNode } from "react";
-import { Link, useRouteLoaderData } from "react-router";
+import { Link, useRouteLoaderData } from "../lib/space-router";
 import { POLICY, SITE } from "@aihot/site";
 import type { loader as rootLoader } from "../root";
 import { useChangelogDot } from "../components/shell/Sidebar";
@@ -21,7 +23,7 @@ export function headers() {
   return edgeTtl(300);
 }
 
-export function meta() {
+function routeMeta() {
   return pageMeta({ title: "我的", path: "/more", noindex: true });
 }
 
@@ -67,6 +69,7 @@ function RowLink({ row, dot = false }: { row: Row; dot?: boolean }) {
 }
 
 export default function MorePage() {
+  const { path } = useSpace();
   const root = useRouteLoaderData<typeof rootLoader>("root");
   const changelogDot = useChangelogDot(root?.changelogVersion ?? null);
   const starred = useStarred();
@@ -111,10 +114,12 @@ export default function MorePage() {
       <div className="mt-6 flex flex-wrap justify-center gap-x-4 gap-y-1 text-[12px] leading-[2] text-ink-4">
         <Link viewTransition to="/terms" className="hover:text-ink-2">{POLICY.terms.name}</Link>
         <Link viewTransition to="/privacy" className="hover:text-ink-2">隐私说明</Link>
-        <a href="/feed.xml" className="hover:text-ink-2">RSS</a>
+        <a href={path("/feed.xml")} className="hover:text-ink-2">RSS</a>
         {SITE.github && <a href={SITE.github} target="_blank" rel="noopener noreferrer" className="hover:text-ink-2">GitHub 开源</a>}
         <Filings className="hover:text-ink-2" badgeSize={13} />
       </div>
     </div>
   );
 }
+
+export const meta = withSpaceMeta(routeMeta);

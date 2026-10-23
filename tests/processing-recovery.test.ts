@@ -73,9 +73,9 @@ async function waitFor(check: () => Promise<boolean>) {
 
 test("a failed audit rolls back the receipt release and the processing job", async () => {
   const id = await article("atomic");
-  await sql`UPDATE articles SET processing_state='failed',processing_error='unknown receipt' WHERE id=${id}`;
   const [receipt] = await sql<{ id: number }[]>`INSERT INTO receipts (logical_key,service,purpose,subject,status)
     VALUES (${`atomic-${T}`},'deepseek','score_article',${`article:${id}@1`},'unknown') RETURNING id`;
+  await sql`UPDATE articles SET processing_state='failed',processing_error=${`receipt ${receipt!.id} outcome unknown`} WHERE id=${id}`;
   await sql.unsafe(`CREATE FUNCTION fail_release_audit() RETURNS trigger LANGUAGE plpgsql AS $$
     BEGIN IF NEW.actor = 'test-release-atomic' THEN RAISE EXCEPTION 'injected audit failure'; END IF; RETURN NEW; END $$`);
   await sql.unsafe("CREATE TRIGGER fail_release_audit BEFORE INSERT ON audit_log FOR EACH ROW EXECUTE FUNCTION fail_release_audit()");
@@ -99,9 +99,9 @@ test("a failed audit rolls back the receipt release and the processing job", asy
 
 test("an authorized recovery preserves unknown billing instead of claiming no charge", async () => {
   const id = await article("billing-unknown");
-  await sql`UPDATE articles SET processing_state='failed',processing_error='unknown receipt' WHERE id=${id}`;
   const [receipt] = await sql<{ id: number }[]>`INSERT INTO receipts(logical_key,service,purpose,subject,status)
     VALUES(${`billing-unknown-${T}`},'deepseek','summarize_article',${`article:${id}@1`},'unknown') RETURNING id`;
+  await sql`UPDATE articles SET processing_state='failed',processing_error=${`receipt ${receipt!.id} outcome unknown`} WHERE id=${id}`;
   await sql`INSERT INTO receipt_attempts(receipt_id,service,attempt,status,error) VALUES(${receipt!.id},'deepseek',1,'unknown','request timed out')`;
   const result = await releaseReceipt(receipt!.id, { billed: null, note: "owner authorized recovery; billing remains unknown" }, "test");
   assert.equal(result?.requeued, true);
@@ -120,20 +120,24 @@ test("a manual re-evaluation survives extraction, a lost job, and receipt releas
   await queuedMinuteAgo();
   const [job] = await boss.fetch(QUEUES.analyze);
   assert.ok(job);
+  assert.equal((job.data as { attemptTag: string }).attemptTag, attemptTag);
+  assert.equal((job.data as { context: { spaceId: string } }).context.spaceId, "default");
+  assert.equal((job.data as { generation: number }).generation, 1);
   await boss.complete(QUEUES.analyze, job.id);
   // The extraction job carries only articleId; its handoff must retain the evaluation identity.
   await queueProcessing(id, { step: "analyze" });
   await queuedMinuteAgo();
   const [afterBody] = await boss.fetch(QUEUES.analyze);
-  assert.deepEqual(afterBody!.data, { articleId: id, attemptTag });
+  assert.deepEqual(afterBody!.data, job.data, "extraction preserves the configuration, generation and paid attempt identity");
   await boss.complete(QUEUES.analyze, afterBody!.id);
   await sql`UPDATE articles SET processing_state='failed' WHERE id=${id}`;
   const [r] = await sql<{ id: number }[]>`INSERT INTO receipts (logical_key,service,purpose,subject,status)
     VALUES (${`identity-${T}`},'deepseek','score_article',${`article:${id}@1`},'unknown') RETURNING id`;
+  await sql`UPDATE articles SET processing_error=${`receipt ${r!.id} outcome unknown`} WHERE id=${id}`;
   await releaseReceipt(r!.id, { billed: false, note: "verified" }, "test");
   await queuedMinuteAgo();
   const [afterRelease] = await boss.fetch(QUEUES.analyze);
-  assert.deepEqual(afterRelease!.data, { articleId: id, attemptTag });
+  assert.deepEqual(afterRelease!.data, job.data, "release resumes the original evaluation context");
   await boss.complete(QUEUES.analyze, afterRelease!.id);
 });
 
@@ -156,10 +160,51 @@ test("an already released receipt wakes its failed grouping job once, with the o
   await recoverStaleWork();
   const [resumed] = await boss.fetch(QUEUES.group);
   assert.equal(resumed?.id, jobId);
-  assert.deepEqual(resumed!.data, data);
+  assert.deepEqual(resumed!.data, initial!.data, "the retry keeps the original parameters and pinned context");
   await boss.fail(QUEUES.group, jobId!, new ReceiptUnknownError(receipt!.id, "failed again after release"));
   await recoverStaleWork();
   assert.equal((await boss.getJobById(QUEUES.group, jobId!))!.state, "failed", "the old release cannot create an endless retry loop");
+});
+
+test("releasing an earlier evaluation's receipt cannot wake a newer failed evaluation", async () => {
+  const id = await article("generation-release");
+  const [oldReceipt] = await sql<{ id: number }[]>`INSERT INTO receipts(logical_key,service,purpose,subject,status)
+    VALUES(${`old-generation-${T}`},'deepseek','score_article',${`article:${id}@1`},'unknown') RETURNING id`;
+  const [currentReceipt] = await sql<{ id: number }[]>`INSERT INTO receipts(logical_key,service,purpose,subject,status)
+    VALUES(${`current-generation-${T}`},'deepseek','score_article',${`article:${id}@1`},'unknown') RETURNING id`;
+  await sql`UPDATE articles SET processing_state='failed', processing_generation=2, processing_attempts=3,
+    processing_attempt_tag='new-evaluation', processing_error=${`receipt ${currentReceipt!.id} outcome unknown`},
+    processing_queued_at=now()-interval '5 minutes' WHERE id=${id}`;
+  const [before] = await sql`SELECT processing_state, processing_error, processing_generation, processing_attempts,
+    processing_attempt_tag, processing_queued_at, processing_config_version FROM articles WHERE id=${id}`;
+  const released = await releaseReceipt(oldReceipt!.id, { billed: false, note: "old call verified" }, "test");
+  assert.equal(released?.requeued, false);
+  assert.equal((await sql`SELECT status FROM receipts WHERE id=${oldReceipt!.id}`)[0]!.status, "failed");
+  const [current] = await sql`SELECT processing_state, processing_error, processing_generation, processing_attempts,
+    processing_attempt_tag, processing_queued_at, processing_config_version FROM articles WHERE id=${id}`;
+  assert.deepEqual(current, before, "release must not clear the current failure or replace its evaluation");
+  assert.equal((await sql`SELECT 1 FROM pgboss.job WHERE data->>'articleId'=${id}`).length, 0);
+
+  const resumed = await releaseReceipt(currentReceipt!.id, { billed: false, note: "current call verified" }, "test");
+  assert.equal(resumed?.requeued, true);
+  const [job] = await sql`SELECT data FROM pgboss.job WHERE data->>'articleId'=${id}`;
+  assert.equal(job!.data.generation, 2);
+  assert.equal(job!.data.attemptTag, "new-evaluation");
+  assert.equal(job!.data.inputRevision, 1);
+});
+
+test("an old revision's released receipt cannot restart the current material revision", async () => {
+  const id = await article("revision-release");
+  const [receipt] = await sql<{ id: number }[]>`INSERT INTO receipts(logical_key,service,purpose,subject,status)
+    VALUES(${`old-revision-${T}`},'deepseek','summarize_article',${`article:${id}@1`},'unknown') RETURNING id`;
+  await sql`UPDATE articles SET revision=2, processing_state='failed', processing_attempts=4,
+    processing_error=${`receipt ${receipt!.id} outcome unknown`} WHERE id=${id}`;
+  const released = await releaseReceipt(receipt!.id, { billed: false, note: "old revision verified" }, "test");
+  assert.equal(released?.requeued, false);
+  const [current] = await sql`SELECT revision, processing_state, processing_attempts, processing_error FROM articles WHERE id=${id}`;
+  assert.deepEqual(current, { revision: 2, processing_state: "failed", processing_attempts: 4,
+    processing_error: `receipt ${receipt!.id} outcome unknown` });
+  assert.equal((await sql`SELECT 1 FROM pgboss.job WHERE data->>'articleId'=${id}`).length, 0);
 });
 
 test("a temporary provider failure resumes the manual evaluation instead of reinstalling the old verdict", async () => {

@@ -1,9 +1,10 @@
+import { spacePath, spaceSlug } from "./space-path.ts";
 // Page metadata from one place: title template, canonical address, OG images, robots; and list addresses,
 // with the feed filters they carry. The site's name and wording come from site/site.ts;
 //; its address from SITE_URL.
 import type { MetaDescriptor } from "react-router";
-import { REPORT_NAMES, reportDateLabel, type ReportDetail, type StoryDetail, type TimelineFilters } from "@aihot/contracts/site";
-import { isCategoryKey, isChannelKey } from "@aihot/contracts/taxonomy";
+import { REPORT_NAMES, reportDateLabel, type ReportDetail, type SiteMeta, type StoryDetail, type TimelineFilters } from "@aihot/contracts/site";
+import { CATEGORY_KEYS, isChannelKey } from "@aihot/contracts/taxonomy";
 import { SITE, subjectAfter, withSubject } from "@aihot/site";
 
 /**
@@ -44,13 +45,13 @@ export function listPath(path: string, params: Record<string, string | number | 
   return qs ? `${path}?${qs}` : path;
 }
 
-/** The feed filters an address asks for; an unknown channel or category means none. */
-export function readFilters(params: URLSearchParams): TimelineFilters {
+/** The API validates category keys against the requested channel configuration. */
+export function readFilters(params: URLSearchParams, categories: readonly string[] | null = CATEGORY_KEYS): TimelineFilters {
   const channel = params.get("channel") ?? "all";
   const category = params.get("category");
   return {
     channel: isChannelKey(channel) ? channel : "all",
-    category: category && isCategoryKey(category) ? category : null,
+    category: (category?.trim() && (categories === null || categories.includes(category)) ? category.trim() : null) as TimelineFilters["category"],
     tag: params.get("tag")?.trim() || null,
   };
 }
@@ -316,4 +317,49 @@ export function topicLd(input: {
     ...(input.dateModified ? { dateModified: input.dateModified } : {}),
     ...(lists.length > 0 ? { mainEntity: lists.length === 1 ? lists[0] : lists } : {}),
   };
+}
+
+interface SpaceMetaArgs {
+  location?: { pathname: string };
+  matches?: Array<{ id: string; loaderData?: unknown } | undefined>;
+}
+
+/** Default industry copy belongs only to the default channel. */
+export function nonDefaultSpace(args: SpaceMetaArgs) {
+  const space = (args.matches?.find(match => match?.id === "root")?.loaderData as SiteMeta | undefined)?.space;
+  return args.location && spaceSlug(args.location.pathname) && space?.id !== "default" ? space : null;
+}
+
+/** Keep canonical, previews and structured-data links inside the route's channel. */
+export function withSpaceMeta<T extends (...args: any[]) => MetaDescriptor[]>(meta: T): T {
+  return ((args: SpaceMetaArgs) => {
+    const slug = args.location ? spaceSlug(args.location.pathname) : null;
+    const origin = siteUrl();
+    const space = (args.matches?.find(match => match?.id === "root")?.loaderData as SiteMeta | undefined)?.space;
+    const channel = nonDefaultSpace(args);
+    function scope(value: unknown): unknown {
+      if (slug && value === origin) return origin + spacePath("/", slug);
+      if (typeof value === "string" && value.startsWith("/")) return spacePath(value, slug);
+      if (typeof value === "string" && value.startsWith(origin + "/")) return origin + spacePath(value.slice(origin.length), slug);
+      if (Array.isArray(value)) return value.map(scope);
+      if (value && typeof value === "object") {
+        const result = Object.fromEntries(Object.entries(value).map(([key, item]) => [key, scope(item)]));
+        if (channel && result.content === SITE_DESCRIPTION && (result.name === "description" || result.name === "twitter:description" || result.property === "og:description")) {
+          result.content = `${channel.name}的公开动态、精选与热点，附摘要和原文链接。`;
+        }
+        if (channel && (result["@type"] === "WebSite" || result["@type"] === "Dataset")) {
+          result.name = channel.name;
+          result.description = `${channel.name}的公开动态、精选与热点，附摘要和原文链接。`;
+          delete result.keywords;
+        }
+        if (channel && result.tagName === "link" && result.rel === "alternate" && result.type === "application/rss+xml") {
+          const kind = /\/feed\/(daily|weekly|monthly)\.xml$/.exec(String(result.href))?.[1];
+          result.title = `${channel.name} ${kind ? ({ daily: "日报", weekly: "周报", monthly: "月报" } as Record<string, string>)[kind] : "精选"}`;
+        }
+        return result;
+      }
+      return value;
+    }
+    return scope(meta(args));
+  }) as T;
 }

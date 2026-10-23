@@ -88,6 +88,11 @@ export async function runMigrations(sql: postgres.Sql, root: string, { backupWai
       console.log(`applied ${name} (${Math.round(performance.now() - start)}ms, ${plan.kind})`);
       count++;
     }
+    // Bootstrap configuration after additive DDL, before any new application writes.
+    if (migrations.some((m) => m.name === "0090_spaces.sql")) {
+      const { ensureDefaultSpace } = await import("../packages/backend/src/spaces/context.ts");
+      await ensureDefaultSpace(sql as never);
+    }
     console.log(count === 0 ? "database is up to date" : `${count} migration(s) applied`);
     return count;
   } finally {

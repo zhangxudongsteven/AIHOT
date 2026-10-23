@@ -6,7 +6,9 @@
 //           closed on its own: a fix removes it, and one judged not worth fixing is closed with a reason.
 // Delivery goes through sendAlert (ops chat, internal-chat fallback; off unless FEISHU_INTERNAL_ENABLED).
 import { addDays, beijingAt, beijingDate, beijingDay, beijingStamp, isValidDate } from "@aihot/contracts/time";
-import { ALERTS, EDITION_TIMES } from "@aihot/site";
+import { ALERTS } from "@aihot/site";
+import { DEFAULT_SPACE_ID, configForContext, resolveSpaceContext } from "../spaces/context.ts";
+import { reportConfig } from "../reports/config.ts";
 import { audit } from "../audit.ts";
 import { sql } from "../db.ts";
 import { agentHandoffs, closeAgentWake, wakeAgent } from "../notify/agent.ts";
@@ -342,8 +344,15 @@ interface AlertState {
 }
 
 const DAILY_PREFIX = "report.daily:";
-const dailyDate = (key: string) => key.startsWith(DAILY_PREFIX) && isValidDate(key.slice(DAILY_PREFIX.length))
-  ? key.slice(DAILY_PREFIX.length) : undefined;
+const dailyKey = (spaceId: string, date: string) => spaceId === DEFAULT_SPACE_ID ? `${DAILY_PREFIX}${date}` : `${DAILY_PREFIX}${encodeURIComponent(spaceId)}:${date}`;
+function dailyIdentity(key: string): { spaceId: string; date: string } | undefined {
+  if (!key.startsWith(DAILY_PREFIX)) return undefined;
+  const value = key.slice(DAILY_PREFIX.length);
+  if (isValidDate(value)) return { spaceId: DEFAULT_SPACE_ID, date: value };
+  const split = value.lastIndexOf(":");
+  if (split < 1 || !isValidDate(value.slice(split + 1))) return undefined;
+  try { return { spaceId: decodeURIComponent(value.slice(0, split)), date: value.slice(split + 1) }; } catch { return undefined; }
+}
 /** Missing dailies are looked for, and announced ones followed, over the last seven Beijing calendar days. */
 const dailyScanFrom = (now: number) => addDays(beijingDate(now), -6);
 
@@ -355,28 +364,33 @@ async function alertState(): Promise<AlertState> {
 async function dailyReportFindings(now: number, open: AlertState): Promise<Finding[]> {
   if (!collecting() || !modelsOn()) return [];
   const today = beijingDate(now);
-  const [activity] = await sql<{ first_report: string | null; first_attempt: Date | null }[]>`
-    SELECT (SELECT min(key) FROM reports WHERE kind = 'daily') AS first_report,
-           (SELECT min(started_at) FROM job_runs WHERE job = 'reports.compose') AS first_attempt`;
-  const starts = [activity?.first_report, activity?.first_attempt && beijingDate(activity.first_attempt)]
-    .filter((date): date is string => !!date && isValidDate(date)).sort();
-  const start = starts[0] ?? today;
-  // New gaps and announced editions alike are followed for the scan window; settleDailies closes older ones.
   const from = dailyScanFrom(now);
-  const dates = new Set(Object.keys(open).map(dailyDate).filter((date): date is string => !!date && date >= from));
-  for (let date = from; date <= today; date = addDays(date, 1)) {
-    if (date >= start) dates.add(date);
+  const spaces = await sql<{ id: string; active_config_version: string }[]>`SELECT id,active_config_version FROM spaces WHERE enabled AND active_config_version IS NOT NULL ORDER BY id`;
+  const out: Finding[] = [];
+  for (const space of spaces) {
+    const context = await resolveSpaceContext(space.id, space.active_config_version);
+    const label = space.id === DEFAULT_SPACE_ID ? "" : `${configForContext(context).siteName}：`;
+    const [activity] = await sql<{ first_report: string | null; first_attempt: Date | null }[]>`
+      SELECT (SELECT min(key) FROM reports WHERE space_id = ${space.id} AND kind = 'daily') AS first_report,
+             (SELECT min(started_at) FROM job_runs WHERE job = ${`reports.compose:${space.id}`}
+               OR (${space.id} = ${DEFAULT_SPACE_ID} AND job = 'reports.compose')) AS first_attempt`;
+    const starts = [activity?.first_report, activity?.first_attempt && beijingDate(activity.first_attempt)]
+      .filter((date): date is string => !!date && isValidDate(date)).sort();
+    const start = starts[0] ?? today;
+    const dates = new Set(Object.keys(open).map(dailyIdentity).filter((identity): identity is { spaceId: string; date: string } => identity?.spaceId === space.id && identity.date >= from).map(identity => identity.date));
+    for (let date = from; date <= today; date = addDays(date, 1)) if (date >= start) dates.add(date);
+    const overdue = [...dates].filter(date => now >= beijingAt(date, reportConfig(context).editionTimes.daily).getTime() + 2 * 3600_000).sort();
+    if (!overdue.length) continue;
+    const published = new Set((await sql<{ key: string }[]>`SELECT key FROM reports WHERE space_id = ${space.id} AND kind = 'daily' AND key IN ${sql(overdue)}`).map(r => r.key));
+    out.push(...overdue.filter(date => !published.has(date)).map(date => ({
+      key: dailyKey(space.id, date), level: "now" as const,
+      title: `${label}${date} 的日报还没生成`, impact: `${label}读者看不到 ${date} 的日报`,
+      heals: "尚未补齐；需查看运行记录确认是否需要人工补做",
+      action: "尽快发起一次维护处理",
+      detail: `space=${space.id} reports daily ${date} 不存在；看 reports.compose:${space.id} 的运行记录`,
+    })));
   }
-  const overdue = [...dates].filter(date => now >= beijingAt(date, EDITION_TIMES.daily).getTime() + 2 * 3600_000).sort();
-  if (!overdue.length) return [];
-  const published = new Set((await sql<{ key: string }[]>`SELECT key FROM reports WHERE kind = 'daily' AND key IN ${sql(overdue)}`).map(r => r.key));
-  return overdue.filter(date => !published.has(date)).map(date => ({
-    key: `${DAILY_PREFIX}${date}`, level: "now",
-    title: `${date} 的日报还没生成`, impact: `读者看不到 ${date} 的日报`,
-    heals: "尚未补齐；需查看运行记录确认是否需要人工补做",
-    action: "尽快发起一次维护处理",
-    detail: `reports daily ${date} 不存在；看 reports.compose 的运行记录`,
-  }));
+  return out;
 }
 
 /**
@@ -387,16 +401,21 @@ async function dailyReportFindings(now: number, open: AlertState): Promise<Findi
 async function settleDailies(open: AlertState, found: Set<string>, now: number): Promise<{ missing: Set<string>; sent: string[] }> {
   const missing = new Set<string>();
   const sent: string[] = [];
-  const dates = Object.keys(open).filter((key) => !found.has(key)).map(dailyDate).filter((date): date is string => !!date);
-  if (!dates.length) return { missing, sent };
-  const published = new Set((await sql<{ key: string }[]>`SELECT key FROM reports WHERE kind = 'daily' AND key IN ${sql(dates)}`).map((r) => r.key));
-  for (const date of dates.filter((date) => !published.has(date))) {
-    const key = `${DAILY_PREFIX}${date}`;
+  const editions = Object.keys(open).filter(key => !found.has(key)).flatMap(key => {
+    const identity = dailyIdentity(key);
+    return identity ? [{ key, ...identity }] : [];
+  });
+  if (!editions.length) return { missing, sent };
+  const published = new Set((await sql<{ space_id: string; key: string }[]>`
+    SELECT r.space_id,r.key FROM reports r JOIN jsonb_to_recordset(${sql.json(editions.map(e => ({ space_id: e.spaceId, key: e.date })))}) wanted(space_id text, key text)
+      ON r.space_id = wanted.space_id AND r.key = wanted.key WHERE r.kind = 'daily'`).map(r => dailyKey(r.space_id, r.key)));
+  for (const { key, spaceId, date } of editions.filter(e => !published.has(e.key))) {
     if (date >= dailyScanFrom(now)) {
       missing.add(key);
       continue;
     }
-    await sendAlert(`${date} 的日报没能补出，停止提醒`, [`读者看不到 ${date} 的日报；缺期从 ${beijingStamp(new Date(open[key]!.since))} 起，已超出七天的检查范围`]);
+    const label = spaceId === DEFAULT_SPACE_ID ? "" : `[${spaceId}] `;
+    await sendAlert(`${label}${date} 的日报没能补出，停止提醒`, [`${label}读者看不到 ${date} 的日报；缺期从 ${beijingStamp(new Date(open[key]!.since))} 起，已超出七天的检查范围`]);
     sent.push(`${key}:expired`);
     await closeAgentWake(key);
     delete open[key];

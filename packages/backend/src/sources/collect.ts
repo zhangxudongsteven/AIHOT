@@ -16,6 +16,7 @@ import { admitListing, filterPublicationWindow } from "./filters.ts";
 import { fetchJsonList } from "./json-list.ts";
 import { fetchXSearch, planXShards, readXSearch, shardHandle, shardQuery, selfThreadHandle, SHARDABLE_SQL, tweetToCandidate, type XBacklog } from "./x.ts";
 import { FetchError, type Candidate, type SourceRow } from "./types.ts";
+import { DEFAULT_SPACE_ID, resolveSpaceContext, type SpaceContext } from "../spaces/context.ts";
 
 export interface CollectResult {
   sourceId: string;
@@ -26,11 +27,12 @@ export interface CollectResult {
   error?: string;
 }
 
-export async function loadSource(id: string): Promise<SourceRow | null> {
+export async function loadSource(id: string, context?: SpaceContext): Promise<SourceRow | null> {
+  const scope = await resolveSpaceContext(context?.spaceId ?? DEFAULT_SPACE_ID, context?.configVersion);
   const [s] = await sql<SourceRow[]>`
-    SELECT id, name, kind, config, tier, participation_mode, first_party, interval_minutes, enabled, cursor, fail_count
-    FROM sources WHERE id = ${id}`;
-  return s ?? null;
+    SELECT id, space_id, name, kind, config, tier, participation_mode, first_party, interval_minutes, enabled, cursor, fail_count
+    FROM sources WHERE id = ${id} AND space_id = ${scope.spaceId}`;
+  return s ? { ...s, context: scope } : null;
 }
 
 export interface StoredDetail {
@@ -45,12 +47,12 @@ export interface StoredDetail {
 }
 
 /** What material under these identities already has, whichever source stored it. */
-export async function storedDetails(identities: string[]): Promise<Map<string, StoredDetail>> {
+export async function storedDetails(identities: string[], spaceId = DEFAULT_SPACE_ID): Promise<Map<string, StoredDetail>> {
   if (identities.length === 0) return new Map();
   // One array parameter: a long listing would exceed the query's parameter limit.
   const rows = await sql<StoredDetail[]>`SELECT identity_key, source_id, title, published_at, publication_time, excerpt, body_status,
     raw->'collectionDetail'->>'rules' AS rules
-    FROM articles WHERE identity_key = ANY(${identities}::text[])`;
+    FROM articles WHERE space_id = ${spaceId} AND identity_key = ANY(${identities}::text[])`;
   return new Map(rows.map((r) => [r.identity_key, r]));
 }
 
@@ -70,7 +72,7 @@ const detailRulesOf = (source: SourceRow) => (source.config.detail ? sha256(JSON
  */
 export async function listingEntries(source: SourceRow, found: Candidate[]): Promise<CollectionCandidate[]> {
   let candidates = admitListing(found, source);
-  if (source.kind === "json_list" && source.config.externalIdPath) candidates = await reuseExternalMaterialIdentities(source.id, candidates);
+  if (source.kind === "json_list" && source.config.externalIdPath) candidates = await reuseExternalMaterialIdentities(source.id, candidates, sql, source.space_id ?? DEFAULT_SPACE_ID);
   if (source.config.sortByPublishedAt) candidates.sort((a, b) => (b.publishedAt?.getTime() ?? 0) - (a.publishedAt?.getTime() ?? 0));
   const unreliableDates = source.config.detail?.publishedAtAuthoritative === true;
   const unique = new Map<string, CollectionCandidate>();
@@ -218,13 +220,13 @@ export async function enrichDetails(candidates: CollectionCandidate[], source: S
   return reads;
 }
 
-async function store(sourceId: string, runId: number, candidates: CollectionCandidate[], backfill: string | null) {
+async function store(sourceId: string, runId: number, candidates: CollectionCandidate[], backfill: string | null, context: SpaceContext) {
   let created = 0;
   let revised = 0;
   for (const c of candidates) {
     const material = { ...c, sourceId, via: "fetch" as const, backfill };
     let res;
-    try { res = await upsertMaterial(material); }
+    try { res = await upsertMaterial(material, sql, context); }
     catch (error) {
       if (!(error instanceof PresentationMismatch)) throw error;
       // This article's transaction retained the consistent original and translation. Keep its
@@ -243,7 +245,7 @@ async function store(sourceId: string, runId: number, candidates: CollectionCand
     if (res.created) created += 1;
     if (res.revised) revised += 1;
     // Extraction first when the source wants full text and none came with the listing, else analysis.
-    if (res.created || res.revised || res.processingNeeded) await queueProcessing(res.articleId);
+    if (res.created || res.revised || res.processingNeeded) await queueProcessing(res.articleId, { context });
   }
   return { created, revised };
 }
@@ -278,8 +280,9 @@ async function recordFetch(db: Db, sourceId: string, runId: number, run: { found
 }
 
 /** `xSince` reads an X account again from that post, without moving its watermark back. */
-export async function collectSource(sourceId: string, opts: { force?: boolean; xSince?: string } = {}): Promise<CollectResult> {
-  const source = await loadSource(sourceId);
+export async function collectSource(sourceId: string, opts: { force?: boolean; xSince?: string; context?: SpaceContext } = {}): Promise<CollectResult> {
+  const context = await resolveSpaceContext(opts.context?.spaceId ?? DEFAULT_SPACE_ID, opts.context?.configVersion);
+  const source = await loadSource(sourceId, context);
   if (!source) return { sourceId, status: "skipped", found: 0, created: 0, revised: 0, error: "missing" };
   if (!source.enabled && !opts.force) return { sourceId, status: "skipped", found: 0, created: 0, revised: 0, error: "paused" };
   if (source.kind === "mp_account" || source.kind === "external") {
@@ -287,7 +290,7 @@ export async function collectSource(sourceId: string, opts: { force?: boolean; x
     return { sourceId, status: "skipped", found: 0, created: 0, revised: 0 };
   }
 
-  const [run] = await sql<{ id: number }[]>`INSERT INTO fetch_runs (source_id) VALUES (${sourceId}) RETURNING id`;
+  const [run] = await sql<{ id: number }[]>`INSERT INTO fetch_runs (space_id, source_id) VALUES (${context.spaceId}, ${sourceId}) RETURNING id`;
   const firstImport = !source.cursor?.initializedAt;
   let created = 0;
   let revised = 0;
@@ -329,7 +332,7 @@ export async function collectSource(sourceId: string, opts: { force?: boolean; x
     // Admission of old archive entries and detail recovery both need the same stored identities.
     // A later date correction must still reach material that was already admitted without a date.
     const known = d || (!firstImport && source.kind !== "x_search")
-      ? await storedDetails(candidates.map((c) => c.identityKey!)) : new Map<string, StoredDetail>();
+      ? await storedDetails(candidates.map((c) => c.identityKey!), context.spaceId) : new Map<string, StoredDetail>();
     const { byListing, admits } = admission(source, known, firstImport);
     candidates = candidates.filter(byListing);
     // First import of a new source: bounded, and archived by source time (never "today", never pushed).
@@ -359,9 +362,9 @@ export async function collectSource(sourceId: string, opts: { force?: boolean; x
     // Kept while the listing offers them; a 304 offers no entries and keeps the last ones.
     if (found) nextCursor.detailDatedOut = datedOut;
     if (!d || !Object.keys(nextCursor.detailDatedOut ?? {}).length) delete nextCursor.detailDatedOut;
-    const stored = await store(sourceId, run!.id, candidates, firstImport ? "first-import" : null);
+    const stored = await store(sourceId, run!.id, candidates, firstImport ? "first-import" : null, context);
     ({ created, revised } = stored);
-    for (const id of await fillScheduledPublications(sourceId)) await queueProcessing(id);
+    for (const id of await fillScheduledPublications(sourceId, context)) await queueProcessing(id, { context });
 
     if (firstImport) nextCursor.initializedAt = new Date().toISOString();
     nextCursor.lastOkAt = new Date().toISOString();
@@ -403,15 +406,17 @@ function coveredTo(m: SourceRow): bigint {
  * its late posts and, read on its own, the posts below it), and the stretches still unread are kept in
  * each account's cursor, so they survive a change of shards.
  */
-export async function collectXShard(key: string, sourceIds: string[]): Promise<{ key: string; status: "ok" | "failed" | "skipped"; accounts: number; found: number; created: number; error?: string }> {
+export async function collectXShard(key: string, sourceIds: string[], suppliedContext?: SpaceContext): Promise<{ key: string; status: "ok" | "failed" | "skipped"; accounts: number; found: number; created: number; error?: string }> {
+  const context = await resolveSpaceContext(suppliedContext?.spaceId ?? DEFAULT_SPACE_ID, suppliedContext?.configVersion);
   const members = (
     await sql<SourceRow[]>`
-      SELECT id, name, kind, config, tier, participation_mode, first_party, interval_minutes, enabled, cursor, fail_count
+      SELECT id, space_id, name, kind, config, tier, participation_mode, first_party, interval_minutes, enabled, cursor, fail_count
       FROM sources WHERE id IN ${sql(sourceIds)} ORDER BY id`
   ).filter((m) => m.enabled && shardHandle(m));
+  if (members.some((m) => m.space_id !== context.spaceId)) throw new Error("X shard sources must belong to its space");
   if (members.length === 0) return { key, status: "skipped", accounts: 0, found: 0, created: 0 };
   const runs = new Map((await sql<{ id: number; source_id: string }[]>`
-    INSERT INTO fetch_runs ${sql(members.map(m => ({ source_id: m.id })), "source_id")} RETURNING id, source_id`
+    INSERT INTO fetch_runs ${sql(members.map(m => ({ source_id: m.id, space_id: context.spaceId })), "source_id", "space_id")} RETURNING id, source_id`
   ).map(r => [r.source_id, r.id]));
   let found = 0;
   let created = 0;
@@ -425,13 +430,13 @@ export async function collectXShard(key: string, sourceIds: string[]): Promise<{
         stretches.add(`${b.query} ${b.next}`);
       }
     }
-    const read = await readXSearch(shardQuery(members.map((m) => shardHandle(m)!), members.map(selfThreadHandle).filter((h): h is string => h !== null)), { lastId: String(since), backlog, subject: `x-shard:${key}` });
+    const read = await readXSearch(shardQuery(members.map((m) => shardHandle(m)!), members.map(selfThreadHandle).filter((h): h is string => h !== null)), { lastId: String(since), backlog, subject: `x-shard:${key}`, context });
     const detail = { shard: key, accounts: members.length, pages: read.pages, truncated: read.truncated, backlog: read.backlog.length, backlogPages: read.backlogPages, dropped: read.dropped };
     const counts = new Map<string, { found: number; created: number; newest: string }>();
     for (const m of members) {
       const handle = shardHandle(m)!.toLowerCase();
       const mine = read.tweets.filter((t) => t.user.screen_name.toLowerCase() === handle);
-      const stored = await store(m.id, runs.get(m.id)!, admitListing(mine.map(tweetToCandidate), m), null);
+      const stored = await store(m.id, runs.get(m.id)!, admitListing(mine.map(tweetToCandidate), m), null, context);
       found += mine.length;
       created += stored.created;
       const newest = mine.reduce((a, t) => (BigInt(t.id_str) > BigInt(a) ? t.id_str : a), String(m.cursor!.lastTweetId));
@@ -466,28 +471,31 @@ const sharded = () => sql`kind = 'x_search' AND config->>'query' ~* ${SHARDABLE_
 
 /** Every minute: a shard is read when any of its accounts is due, all of them at once. */
 async function scheduleXShards(): Promise<number> {
-  const rows = await sql<Array<Pick<SourceRow, "id" | "kind" | "config" | "cursor" | "participation_mode"> & { due: boolean }>>`
-    SELECT id, kind, config, cursor, participation_mode, (next_fetch_at IS NULL OR next_fetch_at <= now()) AS due
-    FROM sources WHERE enabled AND ${sharded()}`;
+  const rows = await sql<Array<Pick<SourceRow, "id" | "space_id" | "kind" | "config" | "cursor" | "participation_mode"> & { due: boolean }>>`
+    SELECT id, space_id, kind, config, cursor, participation_mode, (next_fetch_at IS NULL OR next_fetch_at <= now()) AS due
+    FROM sources WHERE enabled AND ${sharded()} AND EXISTS (SELECT 1 FROM spaces sp WHERE sp.id = sources.space_id AND sp.enabled)`;
   const due = new Set(rows.filter((r) => r.due).map((r) => r.id));
   let enqueued = 0;
-  for (const shard of planXShards(rows)) {
-    if (!shard.sourceIds.some((id) => due.has(id))) continue;
-    if (await enqueue(QUEUES.fetchXShard, { key: shard.key, sourceIds: shard.sourceIds }, { singletonKey: shard.key })) enqueued += 1;
-    await sql`UPDATE sources SET next_fetch_at = now() + interval '10 minutes' WHERE id IN ${sql(shard.sourceIds)}`;
+  for (const spaceId of new Set(rows.map((r) => r.space_id!))) {
+    const context = await resolveSpaceContext(spaceId);
+    for (const shard of planXShards(rows.filter((r) => r.space_id === spaceId))) {
+      if (!shard.sourceIds.some((id) => due.has(id))) continue;
+      if (await enqueue(QUEUES.fetchXShard, { key: shard.key, sourceIds: shard.sourceIds, context }, { singletonKey: `${spaceId}:${shard.key}` })) enqueued += 1;
+      await sql`UPDATE sources SET next_fetch_at = now() + interval '10 minutes' WHERE id IN ${sql(shard.sourceIds)}`;
+    }
   }
   return enqueued;
 }
 
 /** Every minute: enqueue due sources (enabled, not WeChat/external), oldest due first; X accounts by shard. */
 export async function scheduleDueSources(): Promise<{ enqueued: number; shards: number }> {
-  const rows = await sql<{ id: string }[]>`
-    SELECT id FROM sources
-    WHERE enabled AND kind IN ('rss', 'web_list', 'json_list', 'x_search') AND (next_fetch_at IS NULL OR next_fetch_at <= now()) AND NOT (${sharded()})
+  const rows = await sql<{ id: string; space_id: string }[]>`
+    SELECT id, space_id FROM sources
+    WHERE enabled AND EXISTS (SELECT 1 FROM spaces sp WHERE sp.id = sources.space_id AND sp.enabled) AND kind IN ('rss', 'web_list', 'json_list', 'x_search') AND (next_fetch_at IS NULL OR next_fetch_at <= now()) AND NOT (${sharded()})
     ORDER BY next_fetch_at NULLS FIRST LIMIT 40`;
   let enqueued = 0;
   for (const r of rows) {
-    if (await enqueue(QUEUES.fetchSource, { sourceId: r.id }, { singletonKey: r.id })) enqueued += 1;
+    if (await enqueue(QUEUES.fetchSource, { sourceId: r.id, context: await resolveSpaceContext(r.space_id) }, { singletonKey: r.id })) enqueued += 1;
     await sql`UPDATE sources SET next_fetch_at = now() + interval '10 minutes' WHERE id = ${r.id}`;
   }
   return { enqueued, shards: await scheduleXShards() };

@@ -1,3 +1,5 @@
+import { nonDefaultSpace, withSpaceMeta } from "../lib/seo";
+import { useSpace } from "../lib/space";
 import { useLoaderData } from "react-router";
 import type { Route } from "./+types/report-latest";
 import { REPORT_NAMES, type ReportLatestPage } from "@aihot/contracts/site";
@@ -18,16 +20,18 @@ export const { clientLoader, shouldRevalidate } = pageReuse<typeof loader>();
 
 export async function loader({ request }: Route.LoaderArgs) {
   const kind = kindFromPath(new URL(request.url).pathname);
-  const { index, report } = await loadOr404<ReportLatestPage>(`/api/site/reports/${kind}/latest-page`, { signal: request.signal });
+  const { index, report } = await loadOr404<ReportLatestPage>(`/api/site/reports/${kind}/latest-page`, { request, signal: request.signal });
   return cachedPage(600, { kind, report, index, today: beijingDate(Date.now()) });
 }
 
-export function meta({ loaderData, location }: Route.MetaArgs) {
+function routeMeta(args: Route.MetaArgs) {
+  const { loaderData, location } = args;
+  const space = nonDefaultSpace(args);
   const kind = loaderData?.kind ?? "daily";
-  const description = `${REPORTS.descriptions[kind]}。`;
+  const description = space ? `${space.name}的${REPORT_NAMES[kind]}，按频道规则汇集公开动态，附原文来源。` : `${REPORTS.descriptions[kind]}。`;
   const report = loaderData?.report;
   return [...pageMeta({
-    title: withSubject(REPORT_NAMES[kind]),
+    title: space ? `${space.name} ${REPORT_NAMES[kind]}` : withSubject(REPORT_NAMES[kind]),
     description,
     path: location.pathname,
     image: `/og/pages/${kind}.png`,
@@ -37,10 +41,13 @@ export function meta({ loaderData, location }: Route.MetaArgs) {
 }
 
 export default function ReportLatestPage() {
+  const { isDefault } = useSpace();
   const { kind, report, index, today } = useLoaderData<typeof loader>();
   return (
     <ReportLayout kind={kind} index={index} current={report?.key ?? null} today={today} outline={report ? reportOutline(report) : []}>
-      {report ? <ReportPaper report={report} index={index} /> : <EmptyState title={subjectAfter("还没有发布", REPORT_NAMES[kind])}>第一期发布后会出现在这里。</EmptyState>}
+      {report ? <ReportPaper report={report} index={index} /> : <EmptyState title={isDefault ? subjectAfter("还没有发布", REPORT_NAMES[kind]) : `还没有发布${REPORT_NAMES[kind]}`}>第一期发布后会出现在这里。</EmptyState>}
     </ReportLayout>
   );
 }
+
+export const meta = withSpaceMeta(routeMeta);

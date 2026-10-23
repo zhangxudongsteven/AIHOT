@@ -1,5 +1,8 @@
+import { useSpace } from "../../lib/space";
+import { SpaceSwitcher } from "./SpaceSwitcher";
+import { unscopedPath } from "../../lib/space-path";
 import { useEffect, useState } from "react";
-import { Link, useLocation } from "react-router";
+import { Link, useLocation } from "../../lib/space-router";
 import { IntentLink } from "../ui/IntentLink";
 import { SITE } from "@aihot/site";
 import { Wordmark } from "@aihot/site/brand/Logo.tsx";
@@ -19,8 +22,9 @@ export function useChangelogDot(latestVersion: string | null): boolean {
 }
 
 function SideLink({ item, dot }: { item: NavItem; dot: boolean }) {
+  const { isDefault } = useSpace();
   const { pathname } = useLocation();
-  const isActive = sidebarIsActive(item, pathname);
+  const isActive = sidebarIsActive(item, unscopedPath(pathname));
   const Icon = item.icon;
   return (
     <IntentLink
@@ -33,7 +37,7 @@ function SideLink({ item, dot }: { item: NavItem; dot: boolean }) {
       <span className={`flex w-[22px] shrink-0 justify-center ${isActive ? "text-accent" : ""}`}>
         <Icon size={17} />
       </span>
-      <span className="min-w-0 truncate">{item.label}</span>
+      <span className="min-w-0 truncate">{!isDefault && item.to === "/all" ? "全部动态" : !isDefault && item.to === "/daily" ? "日报" : item.label}</span>
       {dot && item.changelog && <span className="ml-auto size-1.5 shrink-0 rounded-full bg-hot" aria-label="有新的更新" />}
     </IntentLink>
   );
@@ -46,6 +50,7 @@ export function Sidebar({ changelogVersion }: { changelogVersion: string | null 
       <Link to="/" className="mb-4 flex h-[50px] items-center px-1 text-ink" aria-label={`${SITE.name} 首页`}>
         <Wordmark size={26} />
       </Link>
+      <SpaceSwitcher />
       <nav className="scrollbar-thin -mx-1 flex-1 overflow-y-auto px-1" aria-label="主导航">
         {sidebar().map((section) => (
           <div key={section.title}>

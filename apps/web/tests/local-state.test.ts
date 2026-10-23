@@ -103,3 +103,36 @@ test("the storage keys readers already have data under keep their names", async 
     assert.equal(state.KEYS[role as keyof typeof kept], key, `readers' ${role} data is stored under ${key}; renaming the key loses it`);
   }
 });
+
+test("channel state preserves legacy default data and isolates reading, searches, drafts and imports", async () => {
+  const { state, values } = await reader([{ id: "shared", title: "Default bookmark" }]);
+  const location = { pathname: "/" };
+  Object.assign(window, { location });
+  assert.equal(state.getStarred()[0]?.title, "Default bookmark");
+  state.markRead("default-read");
+  location.pathname = "/channels/security";
+  assert.deepEqual(state.getStarred(), []);
+  assert.deepEqual(state.getReadIds(), []);
+  state.toggleStar({ id: "shared", title: "Security bookmark", summary: null, sourceName: "", publishedAt: null, score: null, aiSelected: true });
+  state.markRead("security-read");
+  state.addRecentSearch("security search");
+  state.writeRaw(state.KEYS.feedbackDraft, "security draft");
+  const backup = state.exportBundle();
+  assert.equal(backup.space, "security");
+  location.pathname = "/channels/hardware";
+  assert.deepEqual(state.getStarred(), []);
+  assert.deepEqual(state.getReadIds(), []);
+  assert.equal(state.readRaw(state.KEYS.feedbackDraft), null);
+  assert.equal(state.readRaw(state.KEYS.recentSearches), null);
+  assert.throws(() => state.importBundle(JSON.stringify(backup)), /另一个频道/);
+  state.markRead("late-security", "security");
+  assert.deepEqual(state.getReadIds(), [], "a delayed security operation cannot write the channel now in the address bar");
+  location.pathname = "/channels/security/all";
+  assert.equal(state.getStarred()[0]?.title, "Security bookmark");
+  assert.deepEqual(state.getReadIds(), ["late-security", "security-read"]);
+  assert.equal(state.readRaw(state.KEYS.feedbackDraft), "security draft");
+  location.pathname = "/";
+  assert.equal(state.getStarred()[0]?.title, "Default bookmark");
+  assert.deepEqual(state.getReadIds(), ["default-read"]);
+  assert.ok(values.has("aihot-starred-items"));
+});

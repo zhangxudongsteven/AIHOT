@@ -1,5 +1,7 @@
+import { spacePath, spaceSlug } from "../lib/space-path";
+import { withSpaceMeta } from "../lib/seo";
 import { REPORTS, SITE } from "@aihot/site";
-import { Link, redirect, useLoaderData } from "react-router";
+import { Link, redirect, useLoaderData } from "../lib/space-router";
 import type { Route } from "./+types/topic";
 import type { TopicPage } from "@aihot/contracts/site";
 import { cachedPage, loadOr404 } from "../lib/api.server";
@@ -29,8 +31,8 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   const page = params.page ? Number(params.page) : 1;
   if (params.page !== undefined && (!/^\d+$/.test(params.page) || page < 1)) throw new Response("Not found", { status: 404 });
   // Page 1 lives at the topic's own address (308).
-  if (params.page === "1") throw redirect(`/topics/${encodeURIComponent(params.slug)}`, 308);
-  const data = await loadOr404<TopicPage>(`/api/site/topics/${encodeURIComponent(params.slug)}?page=${page}`, { signal: request.signal });
+  if (params.page === "1") throw redirect(spacePath(`/topics/${encodeURIComponent(params.slug)}`, spaceSlug(new URL(request.url).pathname)), 308);
+  const data = await loadOr404<TopicPage>(`/api/site/topics/${encodeURIComponent(params.slug)}?page=${page}`, { request, signal: request.signal });
   return cachedPage(60, { data });
 }
 
@@ -55,7 +57,7 @@ function description(data: TopicPage, parts: Part[]): string {
   return text.length > 150 ? `${text.slice(0, 149)}…` : text;
 }
 
-export function meta({ loaderData }: Route.MetaArgs) {
+function routeMeta({ loaderData }: Route.MetaArgs) {
   if (!loaderData) return [{ title: titled("主题不存在") }, { name: "robots", content: "noindex" }];
   const data = loaderData.data;
   const { topic, page } = data;
@@ -149,3 +151,5 @@ export default function TopicRoute() {
     </div>
   );
 }
+
+export const meta = withSpaceMeta(routeMeta);

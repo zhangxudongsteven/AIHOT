@@ -6,7 +6,8 @@ import { createHash } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { EDITION_TIMES, SITE } from "@aihot/site";
 import { CONTACT_ALIASES, PUBLIC_INTERFACE_VERSION } from "@aihot/contracts/http-policy";
-import { PUBLIC_API_CATEGORY_KEYS } from "@aihot/contracts/taxonomy";
+import { publicationApiPath, publicationCacheKey, publicationConfig, publicationPath, publicationSpace, publicationSpaceId } from "@aihot/backend/publication/context";
+import { publicationPublicCategoryKeys } from "@aihot/backend/publication/taxonomy";
 import { REPO_ROOT, config } from "@aihot/backend/config";
 import { applyPublicHeaders, sendTextWithEtag } from "../http/respond.ts";
 import { loadSitemap } from "@aihot/backend/publication/sitemap";
@@ -37,7 +38,10 @@ const TYPES: Record<string, string> = {
  */
 function fillPlaceholders(text: string, json: boolean): string {
   const values: Record<string, string> = {
-    siteName: SITE.name,
+    siteName: publicationSpace()?.name ?? publicationConfig()?.siteName ?? SITE.name,
+    channelScope: publicationSpaceId() === "default" ? "This API serves only the default channel. Channel URLs select a channel explicitly; cookies and query parameters never change it." : "This API serves only the channel named in its URL. Other channel IDs and cursors are rejected. Daily, weekly and monthly reports belong to this channel and have independent archives.",
+    apiBase: publicationApiPath("/api/v1"),
+    openapiPath: publicationPath("/openapi-v1.json"),
     siteUrl: config.siteUrl,
     description: SITE.description,
     tagline: SITE.tagline,
@@ -46,7 +50,7 @@ function fillPlaceholders(text: string, json: boolean): string {
     weeklyTime: EDITION_TIMES.weekly,
     monthlyTime: EDITION_TIMES.monthly,
     version: PUBLIC_INTERFACE_VERSION,
-    categoryList: PUBLIC_API_CATEGORY_KEYS.join(", "),
+    categoryList: publicationPublicCategoryKeys().join(", "),
   };
   const filled = text.replace(/\{\{(\w+)\}\}/g, (all, key: string) => {
     const value = values[key];
@@ -57,7 +61,7 @@ function fillPlaceholders(text: string, json: boolean): string {
   const walk = (node: unknown) => {
     if (!node || typeof node !== "object") return;
     const o = node as Record<string, unknown>;
-    for (const key of ["enum", "examples"]) if (Array.isArray(o[key]) && (o[key] as unknown[]).includes("{{categories}}")) o[key] = [...PUBLIC_API_CATEGORY_KEYS];
+    for (const key of ["enum", "examples"]) if (Array.isArray(o[key]) && (o[key] as unknown[]).includes("{{categories}}")) o[key] = publicationPublicCategoryKeys();
     for (const v of Object.values(o)) walk(v);
   };
   const doc: unknown = JSON.parse(filled);
@@ -70,19 +74,20 @@ interface Entry {
   etag: string;
 }
 
-const etagOf = (body: Buffer) => `W/"${createHash("sha256").update(body).digest("hex").slice(0, 16)}"`;
+const etagOf = (body: Buffer) => `W/"${createHash("sha256").update(publicationCacheKey()).update("\0").update(body).digest("hex").slice(0, 16)}"`;
 
 const fileCache = new Map<string, Entry & { mtime: number }>();
 
 /** A file's bytes and ETag, read again when it changes; `fill` fills in a public file's placeholders. */
 async function loadFile(file: string, fill = false): Promise<Entry> {
   const s = await stat(file);
-  const cached = fileCache.get(file);
+  const cacheKey = fill ? `${publicationCacheKey()}:${file}` : file;
+  const cached = fileCache.get(cacheKey);
   if (cached && cached.mtime === s.mtimeMs) return cached;
   let body = await readFile(file);
   if (fill && body.includes("{{")) body = Buffer.from(fillPlaceholders(body.toString("utf8"), /\.(json|webmanifest)$/.test(file)));
   const entry = { body, etag: etagOf(body), mtime: s.mtimeMs };
-  fileCache.set(file, entry);
+  fileCache.set(cacheKey, entry);
   return entry;
 }
 

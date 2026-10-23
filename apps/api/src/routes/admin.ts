@@ -13,8 +13,11 @@ import { detachFromFact, mergeStories } from "@aihot/backend/events/corrections"
 import { banFeedbackEmail, banSource, eraseFeedback, feedbackScreenshot, listFeedback, unbanSource, updateFeedback } from "@aihot/backend/admin/feedback";
 import { requeueFailedArticles, runsOverview } from "@aihot/backend/admin/runs";
 import { resolveDelivery } from "@aihot/backend/notify/deliver";
+import { notificationIdentity } from "@aihot/backend/notify/context";
+import { sql } from "@aihot/backend/db";
+import { getSpaceBudgets, setSpaceBudget } from "@aihot/backend/spaces/quotas";
 import { releaseReceipt } from "@aihot/backend/operations/recover";
-import { replaceContactQr, setTargetEnabled, settingsOverview, updateBudget } from "@aihot/backend/admin/settings";
+import { configureContentTarget, listTargets, replaceContactQr, setTargetEnabled, settingsOverview, updateBudget } from "@aihot/backend/admin/settings";
 import { createSource, fetchNow, listSources, previewSource, previewStoredSource, sourceDetail, updateSource } from "@aihot/backend/admin/sources";
 import { sendProblem } from "../http/respond.ts";
 import { adminHandler } from "./admin-auth.ts";
@@ -102,10 +105,21 @@ export function registerAdmin(app: FastifyInstance) {
     return replaceContactQr({ slot: b.slot, data: decodeImage(b.image) }, actorOf(admin));
   }));
   app.post("/api/admin/notify-targets/:key", adminHandler(async (req, reply, admin) => {
-    const b = body<{ enabled: boolean; reason: string }>(req);
-    return orNotFound(req, reply, await setTargetEnabled(param(req, "key"), !!b.enabled, b.reason, actorOf(admin)));
+    const b = body<{ enabled: boolean; reason: string; spaceId?: string }>(req);
+    return orNotFound(req, reply, await setTargetEnabled(param(req, "key"), b.enabled === true, b.reason, actorOf(admin), b.spaceId));
   }));
   app.put("/api/admin/budgets/:service", adminHandler(async (req, _reply, admin) => updateBudget(param(req, "service"), body(req) as never, actorOf(admin))));
+  app.get("/api/admin/spaces/:spaceId/settings", adminHandler(async (req, reply) => {
+    const spaceId = param(req, "spaceId");
+    const [space] = await sql`SELECT id, slug, enabled, active_config_version FROM spaces WHERE id = ${spaceId}`;
+    return space ? { space, targets: await listTargets(spaceId), budgets: await getSpaceBudgets(spaceId) } : notFound(req, reply);
+  }));
+  app.put("/api/admin/spaces/:spaceId/notify-targets", adminHandler(async (req, _reply, admin) => configureContentTarget(param(req, "spaceId"), body(req) as never, actorOf(admin))));
+  app.put("/api/admin/spaces/:spaceId/budgets/:service", adminHandler(async (req, _reply, admin) => setSpaceBudget(param(req, "spaceId"), param(req, "service"), body(req) as never, actorOf(admin))));
+  app.post("/api/admin/spaces/:spaceId/deliveries/:id/resolve", adminHandler(async (req, reply, admin) => {
+    const context = await notificationIdentity({ spaceId: param(req, "spaceId") });
+    return orNotFound(req, reply, await resolveDelivery(Number(param(req, "id")), body(req) as never, actorOf(admin), context));
+  }));
 
 
   // Models and evaluation

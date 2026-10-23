@@ -8,6 +8,7 @@ export { isChineseText as looksZh } from "../lib/text.ts";
 import { onlyXArticleLink } from "../sources/x.ts";
 import type { AnalyzeInputArticle } from "./input.ts";
 import { promptText } from "./prompts.ts";
+import { configForContext, type SpaceContext } from "../spaces/context.ts";
 
 export const PREFILTER_SYSTEM = promptText("prefilter");
 export const UNDERSTAND_SYSTEM = promptText("understand");
@@ -124,12 +125,13 @@ export const understandUser = (a: AnalyzeInputArticle) =>
 
 // Identity context and guard
 
-const lexiconName = (id: string) => IDENTITY_LEXICON.find((e) => e.id === id)?.name ?? null;
+const lexicon = (context?: SpaceContext) => context ? configForContext(context).identityLexicon.map(e => ({ ...e, patterns: e.patterns.map(p => new RegExp(p.source, p.flags)) })) : IDENTITY_LEXICON;
+const lexiconName = (id: string, context?: SpaceContext) => lexicon(context).find((e) => e.id === id)?.name ?? null;
 
 /** Known companies the texts name, by the pack's identity lexicon (each text on its own). */
-export function matchEntityIds(texts: Array<string | null | undefined>): string[] {
+export function matchEntityIds(texts: Array<string | null | undefined>, context?: SpaceContext): string[] {
   const list = texts.filter((t): t is string => typeof t === "string" && t.trim().length > 0);
-  return IDENTITY_LEXICON.filter((e) => e.patterns.some((p) => list.some((t) => p.test(t)))).map((e) => e.id);
+  return lexicon(context).filter((e) => e.patterns.some((p) => list.some((t) => p.test(t)))).map((e) => e.id);
 }
 
 /** A translation may rejoin a name (GPT 5.5 → GPT-5.5): the input counts in both spellings. */
@@ -138,17 +140,18 @@ const surfaceVariants = (texts: Array<string | undefined>) => {
   return [...exact, ...exact.map((t) => t.replace(/\b(gpt|glm)\s+(?=[o\d])/gi, "$1-"))];
 };
 
-function publisherEntityId(url?: string): string | null {
+function publisherEntityId(url?: string, context?: SpaceContext): string | null {
   let host: string;
   try {
     host = new URL(url ?? "").hostname.toLowerCase();
   } catch {
     return null;
   }
-  return PUBLISHER_DOMAINS.find((e) => e.domains.some((d) => host === d || host.endsWith(`.${d}`)))?.entityId ?? null;
+  return (context ? configForContext(context).publisherDomains : PUBLISHER_DOMAINS).find((e) => e.domains.some((d) => host === d || host.endsWith(`.${d}`)))?.entityId ?? null;
 }
 
 export interface TranslateInput {
+  context?: SpaceContext;
   title: string;
   text: string;
   sourceKind: string;
@@ -163,11 +166,11 @@ export interface TranslateInput {
   publicationTime?: string | null;
 }
 
-export function translateInputOf(a: AnalyzeInputArticle): TranslateInput {
+export function translateInputOf(a: AnalyzeInputArticle, context?: SpaceContext): TranslateInput {
   const isX = a.source.kind === "x_search" || !!a.xPost;
   const mainText = isX ? String(a.xPost?.text ?? a.title) : undefined;
   return {
-    title: a.title,
+    context, title: a.title,
     text: isX ? (mainText ?? "") : (a.bodyText ?? a.excerpt ?? ""),
     sourceKind: isX ? "x_search" : a.source.kind,
     sourceName: a.source.name,
@@ -182,12 +185,13 @@ export function translateInputOf(a: AnalyzeInputArticle): TranslateInput {
 }
 
 function identityContext(input: TranslateInput) {
-  const publisher = publisherEntityId(input.documentUrl);
-  const owner = input.sourceOwnerEntityId && lexiconName(input.sourceOwnerEntityId) ? input.sourceOwnerEntityId : null;
+  const publisher = publisherEntityId(input.documentUrl, input.context);
+  const owner = input.sourceOwnerEntityId && lexiconName(input.sourceOwnerEntityId, input.context) ? input.sourceOwnerEntityId : null;
   const texts = [input.title, input.text, input.mainText, input.quotedText, input.sourceName];
-  const allowed = new Set(matchEntityIds(surfaceVariants(texts)));
+  const allowed = new Set(matchEntityIds(surfaceVariants(texts), input.context));
   const joined = texts.filter(Boolean).join("\n");
-  for (const alias of IDENTITY_CONTEXT_ALIASES) if (alias.pattern.test(joined)) allowed.add(alias.entityId);
+  const aliases = input.context ? configForContext(input.context).identityContextAliases.map(a => ({ ...a, pattern: new RegExp(a.pattern.source, a.pattern.flags) })) : IDENTITY_CONTEXT_ALIASES;
+  for (const alias of aliases) if (alias.pattern.test(joined)) allowed.add(alias.entityId);
   if (publisher) allowed.add(publisher);
   if (owner) allowed.add(owner);
   return { allowed: [...allowed].sort(), publisher, owner };
@@ -196,9 +200,9 @@ function identityContext(input: TranslateInput) {
 function identityPrompt(input: TranslateInput): string {
   const ctx = identityContext(input);
   const facts: string[] = [];
-  if (ctx.publisher) facts.push(`文档发布域主体=${lexiconName(ctx.publisher) ?? ctx.publisher}`);
-  if (ctx.owner) facts.push(`来源账号主体=${lexiconName(ctx.owner) ?? ctx.owner}`);
-  return promptText("identity-context", { facts: facts.length > 0 ? facts.join("；") : "未识别到明确发布主体" });
+  if (ctx.publisher) facts.push(`文档发布域主体=${lexiconName(ctx.publisher, input.context) ?? ctx.publisher}`);
+  if (ctx.owner) facts.push(`来源账号主体=${lexiconName(ctx.owner, input.context) ?? ctx.owner}`);
+  return promptText("identity-context", { facts: facts.length > 0 ? facts.join("；") : "未识别到明确发布主体" }, input.context);
 }
 
 export interface IdentityGuard {
@@ -213,8 +217,8 @@ export interface IdentityGuard {
  */
 export function enforceIdentity(input: TranslateInput, copy: { titleZh: string; summaryZh: string }) {
   const allowed = new Set(identityContext(input).allowed);
-  const unsupportedTitleEntityIds = matchEntityIds([copy.titleZh]).filter((id) => !allowed.has(id));
-  const unsupportedSummaryEntityIds = matchEntityIds([copy.summaryZh]).filter((id) => !allowed.has(id));
+  const unsupportedTitleEntityIds = matchEntityIds([copy.titleZh], input.context).filter((id) => !allowed.has(id));
+  const unsupportedSummaryEntityIds = matchEntityIds([copy.summaryZh], input.context).filter((id) => !allowed.has(id));
   return {
     titleZh: unsupportedTitleEntityIds.length ? (looksZh(input.title) ? input.title : "") : copy.titleZh,
     summaryZh: unsupportedSummaryEntityIds.length ? "" : copy.summaryZh,
@@ -283,24 +287,24 @@ export function buildArticlePrompt(input: TranslateInput): string {
     sourceName: sourceName(input.sourceName),
     identity: identityPrompt(input),
     title: input.title,
-    body: input.text ? clampText(cleanArticleTextForLLM(input.text), 6000) : promptText("summarize-article-empty"),
-  });
+    body: input.text ? clampText(cleanArticleTextForLLM(input.text), 6000) : promptText("summarize-article-empty", {}, input.context),
+  }, input.context);
 }
 
 /** The quoted post's block, appended after a blank line when there is one. */
 function quotedBlock(input: TranslateInput, name: string): string {
   if (!input.quotedText) return "";
-  return `\n\n${promptText(name, { quotedLabel: input.quotedAuthor ? `@${input.quotedAuthor}` : "引用推文", quotedText: clampText(input.quotedText, 1500) })}`;
+  return `\n\n${promptText(name, { quotedLabel: input.quotedAuthor ? `@${input.quotedAuthor}` : "引用推文", quotedText: clampText(input.quotedText, 1500) }, input.context)}`;
 }
 
 export function buildShortTweetPrompt(input: TranslateInput): string {
   const post = clampText(input.mainText || input.text || input.title, 4000);
-  return promptText("summarize-short-post", { sourceName: sourceName(input.sourceName), identity: identityPrompt(input), post }) + quotedBlock(input, "summarize-short-post-quoted");
+  return promptText("summarize-short-post", { sourceName: sourceName(input.sourceName), identity: identityPrompt(input), post }, input.context) + quotedBlock(input, "summarize-short-post-quoted");
 }
 
 export function buildLongTweetPrompt(input: TranslateInput): string {
   const post = clampText(input.mainText || input.text || input.title, 4000);
-  return promptText("summarize-long-post", { sourceName: sourceName(input.sourceName), identity: identityPrompt(input), post }) + quotedBlock(input, "summarize-long-post-quoted");
+  return promptText("summarize-long-post", { sourceName: sourceName(input.sourceName), identity: identityPrompt(input), post }, input.context) + quotedBlock(input, "summarize-long-post-quoted");
 }
 
 /** Prompt lines a model sometimes repeats after its answer (来源：…, 【已核验身份上下文】…, 原始标题：…). */

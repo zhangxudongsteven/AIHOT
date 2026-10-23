@@ -7,13 +7,17 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { after, before, test } from "node:test";
 import { closeDb, sql } from "@aihot/backend/db";
-import { detachFromFact, requestRegroup } from "@aihot/backend/events/corrections";
+import { detachFromFact, requestRegroup, moveToFact } from "@aihot/backend/events/corrections";
 import { upsertMaterial } from "@aihot/backend/content/materials";
 import { consolidate, linkRelatedStories } from "@aihot/backend/events/consolidate";
-import { groupArticle } from "@aihot/backend/events/group";
+import { groupArticle, recordSignal } from "@aihot/backend/events/group";
 import { mergeStoryInto } from "@aihot/backend/events/merge";
-import { candidateViews } from "@aihot/backend/events/recall";
+import { candidateViews, recallFacts, relatedPosts } from "@aihot/backend/events/recall";
 import { stopBoss } from "@aihot/backend/jobs/queue";
+import { defaultSpaceConfig, storeSpaceConfig, resolveSpaceContext, type SpaceContext } from "@aihot/backend/spaces/context";
+import { cutoverSpaceIdentity } from "../scripts/space-cutover.ts";
+import { composeStoryDigest } from "@aihot/backend/events/digest";
+import { computeHotRanking, heatRows, heatSeries, snapshotHeat, storedHotRanking } from "@aihot/backend/events/hot";
 import { publishArticle } from "@aihot/backend/publication/publish";
 
 const T = tag();
@@ -35,6 +39,7 @@ const provider = await stub(async (_hit, req) => {
   await hold.promise;
   const body = JSON.parse(req.body) as { messages: Array<{ content: string }> };
   const user = body.messages[1]!.content;
+  if (user.includes("事件当前标题：")) return { id: "stub-digest", choices: [{ message: { content: JSON.stringify({ title: "", digest: "测试频道独立事件综述，只引用本频道资料。" }) } }], usage: { total_tokens: 20 } };
   const pair = user.includes("报道 A");
   const ids = [...user.matchAll(/【候选 (C\d+)】/g)].map((m) => m[1]!);
   const answer = pair
@@ -514,5 +519,153 @@ test("stories that reports keep tying together without merging list each other a
     relation = "SAME_OCCURRENCE";
     pairRelation = null;
     answerAll = false;
+  }
+});
+
+
+async function testSpace(suffix: string): Promise<SpaceContext> {
+  const id = `events-${T}-${suffix}`;
+  await sql`INSERT INTO spaces (id, slug, enabled) VALUES (${id}, ${id}, true)`;
+  const context = await storeSpaceConfig(id, defaultSpaceConfig());
+  await sql`UPDATE spaces SET active_config_version = ${context.configVersion} WHERE id = ${id}`;
+  await sql`INSERT INTO sources (id, space_id, name, kind, tier, participation_mode, next_fetch_at)
+    VALUES (${id}, ${id}, 'Scoped event fixture', 'rss', 'T1', 'editorial', '2100-01-01')`;
+  return resolveSpaceContext(id);
+}
+
+async function scopedReport(context: SpaceContext, url: string, title: string) {
+  const { articleId } = await upsertMaterial({ sourceId: context.spaceId, url, title, bodyText: title, bodyStatus: "ok", via: "fetch", publishedAt: new Date() }, sql, context);
+  await sql`INSERT INTO analyses (space_id, config_version, article_id, input_revision, processing_generation, origin, relevance, category, title_zh, summary_zh, score, selected, output)
+    VALUES (${context.spaceId}, ${context.configVersion}, ${articleId}, 1, 0, 'rule', 'pass', 'ai-models', ${title}, ${title}, 80, false,
+      ${sql.json({ scope: "single", fact: { title, subject: "fixture", action: "release", object: title } })})`;
+  await publishArticle(articleId);
+  return articleId;
+}
+
+test("same URL and identical reports retain independent facts, recall and paid grouping in two spaces", async () => {
+  hold.open();
+  relation = "SAME_OCCURRENCE";
+  pairRelation = null;
+  answerAll = false;
+  await cutoverSpaceIdentity(sql);
+  const a = await testSpace("a");
+  const b = await testSpace("b");
+  const title = randomText();
+  const url = `https://example.invalid/${T}/same-page`;
+  const aid = await scopedReport(a, url, title);
+  const bid = await scopedReport(b, url, title);
+  assert.notEqual(aid, bid);
+  const firstA = await groupArticle(aid, { context: a });
+  const firstB = await groupArticle(bid, { context: b });
+  assert.equal(firstA.verdict, "new-story");
+  assert.equal(firstB.verdict, "new-story");
+  assert.notEqual(firstA.factId, firstB.factId);
+  assert.notEqual(firstA.storyId, firstB.storyId);
+  const at = new Date();
+  const scopedHeat = await heatRows(at, [], undefined, { context: a });
+  assert.ok(scopedHeat.some(row => row.story_id === firstA.storyId));
+  assert.equal(scopedHeat.some(row => row.story_id === firstB.storyId), false);
+  await snapshotHeat(at, { context: a });
+  assert.deepEqual(await heatSeries(firstB.storyId!, at, 7, { context: a }), []);
+  const publicRanking = await storedHotRanking();
+  const ranking = await computeHotRanking(at, { context: a });
+  assert.equal((await storedHotRanking(sql, { context: a }))?.id, ranking.id);
+  assert.deepEqual(await storedHotRanking(), publicRanking, "an internal ranking never replaces the default ranking");
+  assert.equal((await composeStoryDigest(firstA.storyId!, { context: a })).updated, true);
+  assert.deepEqual(await composeStoryDigest(firstB.storyId!, { context: a }), { updated: false });
+  const [digest] = await sql`SELECT space_id, article_ids FROM story_digests WHERE story_id = ${firstA.storyId!}`;
+  assert.equal(digest!.space_id, a.spaceId);
+  assert.deepEqual(digest!.article_ids, [aid]);
+  assert.deepEqual(await groupArticle(bid), { verdict: "skipped" }, "the old adapter cannot operate another space's article");
+  const recalledA = await recallFacts(aid, title, 0, 100, [], { context: a });
+  assert.equal(recalledA.some(c => c.factId === firstB.factId), false);
+  assert.deepEqual(await candidateViews([{ factId: firstB.factId!, storyId: firstB.storyId!, factTitle: title, score: 1 }], { context: a }), []);
+  const matched = await relatedPosts({ id: "query", url, x_post: null }, { context: a });
+  assert.equal(matched.sameUrl?.fact_id, firstA.factId);
+  await sql`UPDATE articles SET processing_config_version = NULL WHERE id = ${bid}`;
+  await assert.rejects(groupArticle(bid, { context: b }), /Grouping context changed/);
+  await sql`UPDATE articles SET processing_config_version = ${b.configVersion} WHERE id = ${bid}`;
+  const next = await scopedReport(b, `${url}-second`, title);
+  const before = provider.hits();
+  const grouped = await groupArticle(next, { context: b });
+  assert.equal(grouped.factId, firstB.factId);
+  assert.ok(provider.hits() > before, "the real grouping path called the local model stub");
+  const receipts = await sql`SELECT space_id, config_version FROM receipts WHERE purpose = 'group_article' AND subject = ${`article:${next}`}`;
+  assert.ok(receipts.length > 0);
+  assert.ok(receipts.every(row => row.space_id === b.spaceId && row.config_version === b.configVersion));
+  const paid = provider.hits();
+  assert.equal((await groupArticle(next, { context: b })).verdict, "kept");
+  assert.equal(provider.hits(), paid, "repeating a completed decision does not pay again");
+  await assert.rejects(recallFacts("query", title, 0, 10, [{ article_id: bid, fact_id: firstB.factId!, story_id: firstB.storyId!, fact_title: title }], { context: a }), /outside space/);
+  const [target] = await sql`SELECT public_id FROM facts WHERE id = ${firstB.factId!}`;
+  await assert.rejects(moveToFact(aid, target!.public_id, "cross-space", "test", { context: a }), /目标事实不存在/);
+  assert.equal(await mergeStoryInto(firstA.storyId!, firstB.storyId!, "cross-space", "test", { context: a }), null);
+  await assert.rejects(sql.begin(tx => recordSignal(tx, firstB.storyId!, aid, { id: a.spaceId, signal_group_id: null }, "editorial", new Date(), { context: a })), /outside space/);
+  await assert.rejects(sql`INSERT INTO fact_articles (space_id, fact_id, article_id, role) VALUES (${a.spaceId}, ${firstB.factId!}, ${aid}, 'mention')`, (error: unknown) => (error as { code?: string }).code === "23503");
+
+  // Historical JSON does not have a foreign key: a forged candidate must never create a cross-space link.
+  const anotherA = await scopedReport(a, `${url}-another`, title);
+  await groupArticle(anotherA, { context: a });
+  for (const articleId of [aid, anotherA]) {
+    await sql`INSERT INTO grouping_decisions (space_id, article_id, fact_id, story_id, verdict, candidates)
+      VALUES (${a.spaceId}, ${articleId}, ${firstA.factId!}, ${firstA.storyId!}, 'new-fact-in-story',
+        ${sql.json([{ id: firstB.factId!, score: 1, relation: "SAME_STORY", confidence: 1 }])})`;
+  }
+  await linkRelatedStories({ context: a });
+  assert.equal((await sql`SELECT 1 FROM story_links WHERE story_id = ${firstA.storyId!} AND other_id = ${firstB.storyId!}`).length, 0);
+});
+
+test("a delayed grouping response cannot overwrite a later processing generation", async () => {
+  const id = await report("generation-race");
+  hold = gate();
+  asked = gate();
+  const pending = groupArticle(id);
+  await Promise.race([asked.promise, pending.then(() => assert.fail("expected a model decision"))]);
+  await sql`UPDATE articles SET processing_generation = processing_generation + 1, selection_adds_value = NULL WHERE id = ${id}`;
+  hold.open();
+  await assert.rejects(pending, /Grouping input changed/);
+  assert.equal((await sql`SELECT 1 FROM fact_articles WHERE article_id = ${id}`).length, 0);
+  const [current] = await sql`SELECT processing_generation, selection_adds_value, grouping_status FROM articles WHERE id = ${id}`;
+  assert.equal(current!.processing_generation, 1);
+  assert.equal(current!.selection_adds_value, null);
+  assert.equal(current!.grouping_status, "pending");
+});
+
+test("an explicit regroup invalidates an in-flight decision while reusing its unchanged paid answer", async () => {
+  const id = await report("regroup-generation-race", `${FACT_TITLE} 新的归组请求`);
+  hold = gate();
+  asked = gate();
+  const pending = groupArticle(id);
+  await Promise.race([asked.promise, pending.then(() => assert.fail("expected a model decision"))]);
+  assert.ok(await requestRegroup(id, `regroup-generation-${T}`));
+  assert.equal(await requestRegroup(id, `regroup-generation-${T}`), null, "a duplicate request keeps the already queued generation");
+  hold.open();
+  await assert.rejects(pending, /Grouping input changed/);
+  assert.equal((await sql`SELECT 1 FROM fact_articles WHERE article_id = ${id}`).length, 0);
+  const [article] = await sql`SELECT processing_generation, grouping_generation FROM articles WHERE id = ${id}`;
+  assert.equal(article!.processing_generation, 0, "the valid analysis is still current");
+  assert.equal(article!.grouping_generation, 1);
+  const hits = provider.hits();
+  assert.equal((await groupArticle(id)).verdict, "same-fact");
+  assert.equal(provider.hits(), hits, "an unchanged prompt and candidate set reuse the prior receipt");
+});
+
+
+test("group-only retries retain the article's original configuration after the active version changes", async () => {
+  const original = await resolveSpaceContext("default");
+  const id = await report("historic-group-config", `${FACT_TITLE} 历史配置`);
+  hold.open();
+  await groupArticle(id);
+  const changed = await storeSpaceConfig("default", { ...defaultSpaceConfig(), siteName: "A newer fixture configuration" });
+  await sql`UPDATE spaces SET active_config_version = ${changed.configVersion} WHERE id = 'default'`;
+  try {
+    await assert.rejects(requestRegroup(id, `${T}-wrong-config`, sql, { context: changed }), /full reanalysis/);
+    const jobId = await requestRegroup(id, `${T}-original-config`);
+    assert.ok(jobId);
+    const [queued] = await sql`SELECT data FROM pgboss.job WHERE id = ${jobId!}`;
+    assert.deepEqual(queued!.data.context, original);
+    assert.equal((await groupArticle(id, { context: original })).verdict, "same-fact");
+  } finally {
+    await sql`UPDATE spaces SET active_config_version = ${original.configVersion} WHERE id = 'default'`;
   }
 });

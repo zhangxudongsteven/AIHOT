@@ -1,7 +1,9 @@
 // Public API v1 (long-term). Field shapes follow the OpenAPI document at /openapi-v1.json (the paths stay
 // /api/v1); each operation's query parameters and Cache-Control are listed in V1_OPERATIONS.
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { PUBLIC_API_CATEGORY_KEYS, type PublicApiCategoryKey } from "@aihot/contracts/taxonomy";
+import { type PublicApiCategoryKey } from "@aihot/contracts/taxonomy";
+import { publicationApiPath, publicationPath } from "@aihot/backend/publication/context";
+import { publicationPublicCategoryKeys } from "@aihot/backend/publication/taxonomy";
 import { config } from "@aihot/backend/config";
 import { InvalidCursorError } from "@aihot/backend/lib/cursor";
 import { SearchBusyError } from "@aihot/backend/publication/pool";
@@ -70,7 +72,7 @@ export function publicHandler(fn: Handler): Handler {
       if (error instanceof SnapshotRequiredError) {
         return sendProblem(req, reply, {
           status: 409, code: "snapshot_required", title: "Snapshot required",
-          detail: "Missing or invalid v1 cursor; fetch /api/v1/selected/snapshot first.",
+          detail: `Missing or invalid v1 cursor; fetch ${publicationApiPath("/api/v1/selected/snapshot")} first.`,
         });
       }
       if (error instanceof SearchBusyError) {
@@ -89,7 +91,7 @@ export function registerV1(app: FastifyInstance) {
     const mode = enumParam(q.mode, "mode", ["selected", "all"] as const, "selected");
     const window = enumParam(q.window, "window", ["24h", "7d"] as const, "7d");
     const by = enumParam(q.by, "by", ["timeline", "published"] as const, "timeline");
-    const category = q.category === undefined ? null : enumParam<PublicApiCategoryKey>(q.category, "category", PUBLIC_API_CATEGORY_KEYS, PUBLIC_API_CATEGORY_KEYS[0]);
+    const category = q.category === undefined ? null : enumParam<PublicApiCategoryKey>(q.category, "category", publicationPublicCategoryKeys() as PublicApiCategoryKey[], publicationPublicCategoryKeys()[0] as PublicApiCategoryKey);
     let search: string | null = null;
     if (q.q !== undefined) {
       search = q.q.trim();
@@ -114,7 +116,7 @@ export function registerV1(app: FastifyInstance) {
     if (publicId.length > 128) throw new QueryError("publicId must be a short opaque id.");
     const found = await resolveStory(publicId);
     if (found.kind === "merged") {
-      return reply.code(308).header("Location", `/api/v1/stories/${found.target}`).header("Cache-Control", V1_OPERATIONS.storyByPublicId.cacheControl).send();
+      return reply.code(308).header("Location", publicationApiPath(`/api/v1/stories/${found.target}`)).header("Cache-Control", V1_OPERATIONS.storyByPublicId.cacheControl).send();
     }
     const body = found.kind === "found" ? await v1Story(found.storyId) : null;
     if (!body) return sendProblem(req, reply, { status: 404, code: "not_found", detail: `No public story exists for ${publicId}.`, cacheControl: "public, max-age=60" });
@@ -215,7 +217,7 @@ export function registerV1Fallbacks(app: FastifyInstance) {
       status: 404,
       code: "not_found",
       title: "Not found",
-      detail: `No public API v1 operation exists at ${path}. Recent items are at /api/v1/items; every operation is listed at ${config.siteUrl}/openapi-v1.json`,
+      detail: `No public API v1 operation exists at ${path}. Recent items are at ${publicationApiPath("/api/v1/items")}; every operation is listed at ${config.siteUrl}${publicationPath("/openapi-v1.json")}`,
     });
   };
   for (const url of ["/api/v1", "/api/v1/*", "/openapi-v1.json"]) readOnlyMethods(app, url);

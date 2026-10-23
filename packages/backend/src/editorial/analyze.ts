@@ -30,9 +30,10 @@ import {
   type IdentityGuard,
 } from "./writing.ts";
 import { CATEGORY_GUIDE, CATEGORY_TAGS, ENTITIES, ENTITY_TAGS, ITEM_TYPES, normalizeTags, TOPIC_TAGS } from "./vocabulary.ts";
-import { promptText, promptVersion } from "./prompts.ts";
+import { promptText, promptVersion, promptVersionFor } from "./prompts.ts";
 import { originalPostCopy } from "../content/posts.ts";
 import { wordingProblems } from "./wording.ts";
+import { configForContext, DEFAULT_SPACE_ID, resolveSpaceContext, type SpaceContext } from "../spaces/context.ts";
 
 export { buildMaterial, loadAnalyzeInput, type AnalyzeInputArticle };
 
@@ -57,15 +58,15 @@ export const SCORE_CALLS = 2;
  * The thresholds on the mean score, per source tier (industry/selection.ts): selected when
  * score1 + score2 >= 2 × threshold. Tiers without a threshold are not scored for 精选.
  */
-export function tierThreshold(tier: string): number | null {
-  return SELECTION.thresholds[tier] ?? null;
+export function tierThreshold(tier: string, context?: SpaceContext): number | null {
+  return (context ? configForContext(context).selection : SELECTION).thresholds[tier] ?? null;
 }
 
 /** Unselected items above this mean are written like selected ones. */
 export const UNDERSTAND_FLOOR = SELECTION.understandFloor;
 
 /** Call parameters of the score step, unless the model sets its own (the site's preset, `scoreCall`). */
-const scoreCall = (model: string) => MODELS[model]?.scoreCall ?? { temperature: 0.2, maxTokens: 1024, timeoutMs: 120_000 };
+const scoreCall = (model: string, context?: SpaceContext) => (context ? configForContext(context).modelSpecs : MODELS)[model]?.scoreCall ?? { temperature: 0.2, maxTokens: 1024, timeoutMs: 120_000 };
 
 /** The score prompt: the industry's taste (industry/prompts/selection-score.md). */
 export const SCORE_SYSTEM = promptText("selection-score");
@@ -161,7 +162,8 @@ export const STRUCTURE_SYSTEM = promptText("structure", {
 });
 
 /** Keep only quotes present both in the original material and in the text the structure model saw. */
-export function normalizeStructure(data: z.infer<typeof StructureSchema>, a: AnalyzeInputArticle) {
+export function normalizeStructure(data: Omit<z.infer<typeof StructureSchema>, "category"> & { category: string | null }, a: AnalyzeInputArticle, context?: SpaceContext) {
+  const entities = context ? configForContext(context).entities : ENTITIES;
   const visible = collapseWhitespace(buildMaterial(a));
   const originals = (a.xPost
     ? [String(a.xPost.text ?? a.title), String(a.xPost.quoted?.text ?? "")]
@@ -182,8 +184,8 @@ export function normalizeStructure(data: z.infer<typeof StructureSchema>, a: Ana
     }).slice(0, 4),
   };
   return {
-    category: data.category, tags: normalizeTags(data.tags),
-    subjects: [...new Set(data.subjects.map((s) => s.trim().toLowerCase()).filter((s) => s in ENTITIES))],
+    category: data.category, tags: normalizeTags(data.tags, context),
+    subjects: [...new Set(data.subjects.map((s) => s.trim().toLowerCase()).filter((s) => s in entities))],
     scope, fact,
   };
 }
@@ -219,7 +221,32 @@ export function waitsForPage(a: AnalyzeInputArticle): boolean {
   return a.bodyStatus === "pending" && !a.bodyText && !a.xPost && pageFetchable(a.url, a.source.kind);
 }
 
-type StepOpts = { attemptTag?: string; scoreModel?: string };
+export type StepOpts = { attemptTag?: string; scoreModel?: string; context?: SpaceContext; generation?: number; inputRevision?: number };
+const validateContext = async (context?: SpaceContext) => { if (context) await resolveSpaceContext(context.spaceId, context.configVersion); };
+function versionsFor(context?: SpaceContext) {
+  if (!context) return PROMPT_VERSIONS;
+  return {
+    prefilter: promptVersionFor(context, "prefilter"), score: promptVersionFor(context, "selection-score"), understand: promptVersionFor(context, "understand"),
+    summarize: promptVersionFor(context, "summarize-article", "summarize-article-empty", "summarize-short-post", "summarize-short-post-quoted", "summarize-long-post", "summarize-long-post-quoted", "identity-context"),
+    structure: promptVersionFor(context, "structure"), wording: promptVersionFor(context, "mend-wording"),
+  };
+}
+function structureSystem(context?: SpaceContext): string {
+  if (!context) return STRUCTURE_SYSTEM;
+  const p = configForContext(context);
+  return promptText("structure", {
+    categoryCount: ZH_COUNT[p.categories.length] ?? String(p.categories.length),
+    categoryGuide: p.categories.map(c => `- ${c.key}（${c.label}）：${c.guide}`).join("\n"),
+    categoryTags: p.categoryTags.join("、"), topicTags: p.topicTags.join("、"), entityTags: p.entityTags.join("、"),
+    entities: p.entityOrder.map(id => `${id}（${p.entities[id]!.aliases.slice(0, 3).join("/")}）`).join("，"),
+  }, context);
+}
+function structureSchema(context?: SpaceContext) {
+  return context ? StructureSchema.extend({ category: z.string().refine(v => configForContext(context).categories.some(c => c.key === v)).nullable().catch(null) }) : StructureSchema;
+}
+function understandSchema(context?: SpaceContext) {
+  return context ? UnderstandSchema.extend({ itemType: z.string().refine(v => configForContext(context).itemTypes.includes(v)) }) : UnderstandSchema;
+}
 type ReceiptObserver = (receiptId: number) => void;
 
 /** A stopping worker finishes the stage it is in, never starts the next. */
@@ -229,14 +256,16 @@ const subjectOf = (a: AnalyzeInputArticle) => `article:${a.id}@${a.revision}`;
 const tagged = (attemptTag: string | undefined, step: string) => [attemptTag, step].filter(Boolean).join(":") || undefined;
 
 async function runPrefilter(a: AnalyzeInputArticle, opts: StepOpts): Promise<NonNullable<AnalysisRun["prefilter"]>> {
-  const model = await modelFor("prefilter");
+  await validateContext(opts.context);
+  const model = await modelFor("prefilter", opts.context);
   checkAnalysisRunning();
   const res = await chatJson({
+    context: opts.context,
     model,
     purpose: "prefilter_article",
     subject: subjectOf(a),
-    promptVersion: PROMPT_VERSIONS.prefilter,
-    system: PREFILTER_SYSTEM,
+    promptVersion: versionsFor(opts.context).prefilter,
+    system: opts.context ? promptText("prefilter", {}, opts.context) : PREFILTER_SYSTEM,
     user: prefilterUser(a),
     schema: PrefilterSchema,
     temperature: 0,
@@ -271,8 +300,8 @@ async function runScores(
   opts: StepOpts,
   onReceipt?: ReceiptObserver,
 ): Promise<NonNullable<AnalysisRun["scores"]>> {
-  const model = opts.scoreModel ?? (await modelFor("score"));
-  const call = scoreCall(model);
+  const model = opts.scoreModel ?? (await modelFor("score", opts.context));
+  const call = scoreCall(model, opts.context);
   const input = buildScoreInput(a);
   const values: number[] = [];
   const receiptIds: number[] = [];
@@ -282,7 +311,8 @@ async function runScores(
     checkAnalysisRunning();
     try {
       const res = await chatJson({
-        model, purpose: "score_article", subject: subjectOf(a), promptVersion: PROMPT_VERSIONS.score, system: SCORE_SYSTEM, user: input,
+        context: opts.context,
+        model, purpose: "score_article", subject: subjectOf(a), promptVersion: versionsFor(opts.context).score, system: opts.context ? promptText("selection-score", {}, opts.context) : SCORE_SYSTEM, user: input,
         schema: ScoreSchema, temperature: call.temperature, maxTokens: call.maxTokens, timeoutMs: call.timeoutMs,
         // Each call is its own paid request; an explicit re-evaluation gets new ones.
         attemptTag: tagged(opts.attemptTag, `score-${i + 1}`),
@@ -308,42 +338,47 @@ export async function runSelectionScores(
   opts: StepOpts = {},
   onReceipt?: ReceiptObserver,
 ): Promise<AnalysisRun["scores"]> {
-  const threshold = tierThreshold(a.source.tier);
+  await validateContext(opts.context);
+  const threshold = tierThreshold(a.source.tier, opts.context);
   return threshold === null ? null : runScores(a, threshold, opts, onReceipt);
 }
 
 export async function runStructure(a: AnalyzeInputArticle, opts: StepOpts = {}): Promise<NonNullable<AnalysisRun["structure"]>> {
-  const model = await modelFor("structure");
+  await validateContext(opts.context);
+  const model = await modelFor("structure", opts.context);
   checkAnalysisRunning();
   const res = await chatJson({
+    context: opts.context,
     model,
     purpose: "structure_article",
     subject: subjectOf(a),
-    promptVersion: PROMPT_VERSIONS.structure,
-    system: STRUCTURE_SYSTEM,
+    promptVersion: versionsFor(opts.context).structure,
+    system: structureSystem(opts.context),
     user: buildMaterial(a),
-    schema: StructureSchema,
+    schema: structureSchema(opts.context),
     temperature: 0.2,
     maxTokens: 1200,
     attemptTag: tagged(opts.attemptTag, "structure"),
   });
-  return { ...normalizeStructure(res.data, a), model: res.model, receiptId: res.receiptId, reused: res.reused };
+  return { ...normalizeStructure(res.data, a, opts.context), model: res.model, receiptId: res.receiptId, reused: res.reused };
 }
 
 /** Content understanding grounded in the original; null on a content-filter refusal. */
 export async function runUnderstand(a: AnalyzeInputArticle, opts: StepOpts = {}): Promise<AnalysisRun["writing"]> {
-  const model = await modelFor("understand");
+  await validateContext(opts.context);
+  const model = await modelFor("understand", opts.context);
   const text = understandUser(a);
   const call = (image: ContentPart | null) => {
     checkAnalysisRunning();
     return chatJson({
-      model, purpose: "understand_article", subject: subjectOf(a), promptVersion: PROMPT_VERSIONS.understand, system: UNDERSTAND_SYSTEM,
-      user: image ? [{ type: "text", text }, image] : text, schema: UnderstandSchema, temperature: 0.2, maxTokens: 16_384,
+      context: opts.context,
+      model, purpose: "understand_article", subject: subjectOf(a), promptVersion: versionsFor(opts.context).understand, system: opts.context ? promptText("understand", {}, opts.context) : UNDERSTAND_SYSTEM,
+      user: image ? [{ type: "text", text }, image] : text, schema: understandSchema(opts.context), temperature: 0.2, maxTokens: 16_384,
       timeoutMs: 180_000, attemptTag: tagged(opts.attemptTag, "understand"),
     });
   };
   // Image input is opt-in: an unspecified capability must not become a paid provider probe.
-  const image = modelSupportsVision(model) ? await firstImagePart(a) : null;
+  const image = modelSupportsVision(model, opts.context) ? await firstImagePart(a) : null;
   let res: Awaited<ReturnType<typeof call>>;
   try {
     res = await call(image);
@@ -359,7 +394,7 @@ export async function runUnderstand(a: AnalyzeInputArticle, opts: StepOpts = {})
     }
   }
   const d = res.data;
-  const copy = finalizeCopy(translateInputOf(a), { titleZh: d.titleZh, summaryZh: d.summaryZh });
+  const copy = finalizeCopy(translateInputOf(a, opts.context), { titleZh: d.titleZh, summaryZh: d.summaryZh });
   return {
     kind: "understand", model: res.model, titleZh: copy.titleZh, summaryZh: copy.summaryZh, reasonZh: d.editorialJudgment.trim() || null,
     itemType: d.itemType, authorRole: d.authorRole, identityGuard: copy.identityGuard, receiptIds: [res.receiptId], reused: res.reused,
@@ -379,14 +414,15 @@ async function mendWording(a: AnalyzeInputArticle, w: NonNullable<AnalysisRun["w
   // A copy missing its title or summary waits for a whole one (normalizeAnalysis): nothing to mend, and no text to
   // let a model without the material fill in.
   if ((w.kind !== "understand" && w.kind !== "summarize") || !w.titleZh || !w.summaryZh) return w;
-  const problems = wordingProblems(w);
+  const problems = wordingProblems(w, opts.context);
   if (!problems.length) return w;
-  const t = translateInputOf(a);
+  const t = translateInputOf(a, opts.context);
   checkAnalysisRunning();
   let res;
   try {
     res = await chatJson({
-      model: await modelFor("wording"), purpose: "mend_wording", subject: subjectOf(a), promptVersion: PROMPT_VERSIONS.wording, system: MEND_SYSTEM,
+      context: opts.context,
+      model: await modelFor("wording", opts.context), purpose: "mend_wording", subject: subjectOf(a), promptVersion: versionsFor(opts.context).wording, system: opts.context ? promptText("mend-wording", { reasonLabel: configForContext(opts.context).reasonLabel }, opts.context) : MEND_SYSTEM,
       user: [
         `来源：${t.sourceName ?? "（未注明）"}`, `原题：${t.title}`,
         `中文稿：\n${JSON.stringify({ titleZh: w.titleZh, summaryZh: w.summaryZh, reasonZh: w.reasonZh })}`,
@@ -408,13 +444,13 @@ async function mendWording(a: AnalyzeInputArticle, w: NonNullable<AnalysisRun["w
   // A guard that emptied the title or summary (a company the input does not name), a number changed or dropped, or
   // no fewer such words: the first copy stands.
   const numbers = (c: { titleZh: string; summaryZh: string; reasonZh: string | null }) => (`${c.titleZh} ${c.summaryZh} ${c.reasonZh ?? ""}`.match(/\d+(?:[.,]\d+)*/g) ?? []).sort().join(" ");
-  if (!mended.titleZh || !mended.summaryZh || numbers(mended) !== numbers(w) || wordingProblems(mended).length >= problems.length) return { ...w, ...paid };
+  if (!mended.titleZh || !mended.summaryZh || numbers(mended) !== numbers(w) || wordingProblems(mended, opts.context).length >= problems.length) return { ...w, ...paid };
   return { ...w, ...mended, identityGuard: copy.identityGuard ?? w.identityGuard, ...paid };
 }
 
 /** The title/summary prompts (articles, long and short posts). */
 async function runSummarize(a: AnalyzeInputArticle, opts: StepOpts): Promise<NonNullable<AnalysisRun["writing"]>> {
-  const t = translateInputOf(a);
+  const t = translateInputOf(a, opts.context);
   const isX = t.sourceKind === "x_search";
   const short = isShortTweetInput(t);
   const main = collapseWhitespace(t.mainText || t.title);
@@ -422,13 +458,14 @@ async function runSummarize(a: AnalyzeInputArticle, opts: StepOpts): Promise<Non
   // A short post already in Chinese is its own copy, and too little text is not written up from a title.
   if (short && !needsShortTweetTranslation(main)) return { kind: "verbatim", model: null, titleZh: main, summaryZh: main, ...plain };
   if (!short && t.text.trim().length < 20) return { kind: "none", model: null, titleZh: looksZh(t.title) ? t.title : "", summaryZh: "", ...plain };
-  const route = await modelRoute("summarize");
+  const route = await modelRoute("summarize", opts.context);
   checkAnalysisRunning();
   const res = await chatJson({
+    context: opts.context,
     ...route,
     purpose: "summarize_article",
     subject: subjectOf(a),
-    promptVersion: PROMPT_VERSIONS.summarize,
+    promptVersion: versionsFor(opts.context).summarize,
     system: "",
     user: short ? buildShortTweetPrompt(t) : isX ? buildLongTweetPrompt(t) : buildArticlePrompt(t),
     schema: SummarizeSchema,
@@ -475,6 +512,7 @@ export function scoresSelect(scores: AnalysisRun["scores"], threshold = scores?.
 
 /** Runs the steps on the material as it is (or reuses their receipts) without writing business results. */
 export async function runAnalysis(a: AnalyzeInputArticle, opts: StepOpts = {}): Promise<AnalysisRun> {
+  await validateContext(opts.context);
   checkAnalysisRunning();
   // Missing article text waits for a later revision, before any paid step; displayable original posts keep their judgement.
   if (awaitsMaterial(a)) return { prefilter: null, scores: null, writing: null, structure: null };
@@ -486,7 +524,7 @@ export async function runAnalysis(a: AnalyzeInputArticle, opts: StepOpts = {}): 
   try {
     const scores = await runSelectionScores(a, opts);
     const sum = scoreSum(scores);
-    const near = scoresSelect(scores) || (sum !== null && sum > UNDERSTAND_FLOOR * SCORE_CALLS);
+    const near = scoresSelect(scores) || (sum !== null && sum > (opts.context ? configForContext(opts.context).selection.understandFloor : UNDERSTAND_FLOOR) * SCORE_CALLS);
     const s = await structure;
     if ("error" in s) throw s.error;
     const writing: NonNullable<AnalysisRun["writing"]> = original
@@ -501,7 +539,8 @@ export async function runAnalysis(a: AnalyzeInputArticle, opts: StepOpts = {}): 
 }
 
 /** One judgement from the steps: the selection rule, the reader-facing copy and the structure. */
-export function normalizeAnalysis(run: AnalysisRun) {
+export function normalizeAnalysis(run: AnalysisRun, context?: SpaceContext) {
+  const entities = context ? configForContext(context).entities : ENTITIES;
   const label = run.prefilter?.label;
   const titleZh = collapseWhitespace(run.writing?.titleZh ?? "");
   const summaryZh = (run.writing?.summaryZh ?? "").trim();
@@ -514,7 +553,7 @@ export function normalizeAnalysis(run: AnalysisRun) {
   const subjects = run.structure?.subjects ?? [];
   const tags = [...(run.structure?.tags ?? [])];
   for (const s of subjects) {
-    const display = ENTITIES[s]?.displayTag;
+    const display = entities[s]?.displayTag;
     if (display && !tags.includes(display)) tags.push(display);
   }
   return {
@@ -551,12 +590,17 @@ export interface AnalyzeResult {
  * is kept for traceability but never overwrites a newer input (stale = true).
  */
 export async function analyzeArticle(articleId: string, opts: StepOpts = {}): Promise<AnalyzeResult | null> {
-  const input = await loadAnalyzeInput(articleId);
+  await validateContext(opts.context);
+  const input = await loadAnalyzeInput(articleId, opts.context);
   if (!input) return null;
+  if (opts.context && opts.context.spaceId !== DEFAULT_SPACE_ID && !input.processingConfigVersion) throw new Error("A non-default article has no pinned processing configuration");
+  if (opts.context && input.processingConfigVersion && input.processingConfigVersion !== opts.context.configVersion) return { analysisId: null, stale: true, output: null, receiptIds: [], reused: true };
+  if (opts.inputRevision !== undefined && input.revision !== opts.inputRevision) return { analysisId: null, stale: true, output: null, receiptIds: [], reused: true };
+  if (opts.generation !== undefined && input.processingGeneration !== opts.generation) return { analysisId: null, stale: true, output: null, receiptIds: [], reused: true };
   // Its page first; extraction queues the analysis again (normally the queue already routed it there).
   if (waitsForPage(input)) return { analysisId: null, stale: false, needsBody: true, output: null, receiptIds: [], reused: true };
   const run = await runAnalysis(input, opts);
-  const out = normalizeAnalysis(run);
+  const out = normalizeAnalysis(run, opts.context);
   const receiptIds = [
     ...(run.prefilter ? [run.prefilter.receiptId] : []), ...(run.scores?.receiptIds ?? []), ...(run.writing?.receiptIds ?? []),
     ...(run.structure ? [run.structure.receiptId] : []),
@@ -570,18 +614,24 @@ export async function analyzeArticle(articleId: string, opts: StepOpts = {}): Pr
     scope: out.scope, fact: out.fact,
   };
   const committed = await sql.begin(async (tx) => {
-    const [current] = await tx<{ revision: number }[]>`SELECT revision FROM articles WHERE id = ${articleId} FOR UPDATE`;
-    const stale = !current || current.revision !== input.revision;
+    const spaceId = opts.context?.spaceId ?? DEFAULT_SPACE_ID;
+    const [current] = await tx<{ revision: number; processing_generation: number; processing_config_version: string | null }[]>`SELECT revision, processing_generation, processing_config_version FROM articles WHERE id = ${articleId} AND space_id = ${spaceId} FOR UPDATE`;
+    const stale = !current || current.revision !== input.revision || current.processing_generation !== (opts.generation ?? input.processingGeneration ?? 0)
+      || !!(opts.context && current.processing_config_version && current.processing_config_version !== opts.context.configVersion);
+    if (opts.context && receiptIds.length) {
+      const owned = await tx<{ id: number }[]>`SELECT id FROM receipts WHERE id IN ${tx(receiptIds)} AND space_id = ${spaceId} AND config_version = ${opts.context.configVersion}`;
+      if (new Set(owned.map(r => r.id)).size !== new Set(receiptIds).size) throw new Error("Analysis receipts do not belong to its space and configuration");
+    }
     const [row] = await tx<{ id: number }[]>`
       INSERT INTO analyses (article_id, input_revision, origin, model, prompt_version, receipt_ids, relevance, category, tags,
-        subjects, title_zh, summary_zh, reason_zh, score, selected, output)
-      VALUES (${articleId}, ${input.revision}, 'model', ${w?.model ?? run.prefilter?.model ?? null}, ${ANALYZE_PROMPT_VERSION}, ${receiptIds},
+        subjects, title_zh, summary_zh, reason_zh, score, selected, output, space_id, config_version, processing_generation)
+      VALUES (${articleId}, ${input.revision}, 'model', ${w?.model ?? run.prefilter?.model ?? null}, ${Object.values(versionsFor(opts.context)).join("+")}, ${receiptIds},
         ${out.relevance}, ${out.category}, ${out.tags}, ${out.subjects}, ${out.titleZh}, ${out.summaryZh}, ${out.reasonZh},
-        ${out.score}, ${out.selected}, ${tx.json(detail as never)})
+        ${out.score}, ${out.selected}, ${tx.json(detail as never)}, ${spaceId}, ${opts.context?.configVersion ?? null}, ${opts.generation ?? input.processingGeneration ?? 0})
       RETURNING id`;
     for (const id of receiptIds) await completeReceipt(tx, id);
     if (!stale) {
-      await tx`UPDATE articles SET processing_state = ${out.relevance === "block" ? "blocked" : "analyzed"}, processing_error = NULL WHERE id = ${articleId}`;
+      await tx`UPDATE articles SET processing_state = ${out.relevance === "block" ? "blocked" : "analyzed"}, processing_error = NULL, processing_config_version = ${opts.context?.configVersion ?? null} WHERE id = ${articleId} AND space_id = ${spaceId}`;
     }
     return { analysisId: row!.id, stale };
   });

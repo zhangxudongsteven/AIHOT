@@ -1,3 +1,4 @@
+import { unscopedPath } from "../../lib/space-path.ts";
 // Names, dates and grouping for daily, weekly and monthly reports.
 import { REPORT_NAMES, type ReportNavigationEntry, type ReportKind } from "@aihot/contracts/site";
 import { beijingDate, beijingWeekday, isoWeekLabel, isoWeekRange, monthDay } from "@aihot/contracts/time";
@@ -9,6 +10,7 @@ export const KINDS: ReportKind[] = ["daily", "weekly", "monthly"];
 export const KIND_PATH: Record<ReportKind, string> = { daily: "/daily", weekly: "/weekly", monthly: "/monthly" };
 
 export function kindFromPath(pathname: string): ReportKind {
+  pathname = unscopedPath(pathname);
   if (pathname.startsWith("/weekly")) return "weekly";
   if (pathname.startsWith("/monthly")) return "monthly";
   return "daily";
@@ -130,8 +132,9 @@ const METRICS: Array<[key: string, unit: string]> = [
   ["selectedCount", UNITS.selectedCount],
   ["reportsCovered", UNITS.reportsCovered],
 ];
-export function metricItems(metrics: Record<string, number>): Array<{ value: number; unit: string }> {
-  return METRICS.filter(([k]) => typeof metrics[k] === "number" && (k !== "modelsReleased" || metrics[k]! > 0)).map(([k, unit]) => ({ value: metrics[k]!, unit }));
+export function metricItems(metrics: Record<string, number>, releaseUnit: string | null = RELEASE?.unit ?? null): Array<{ value: number; unit: string }> {
+  return METRICS.filter(([k]) => k !== "modelsReleased").concat(releaseUnit ? [["modelsReleased", releaseUnit]] : [])
+    .filter(([k]) => typeof metrics[k] === "number" && (k !== "modelsReleased" || metrics[k]! > 0)).map(([k, unit]) => ({ value: metrics[k]!, unit }));
 }
 
 /** "前一日 · 9月25日", "上一期 · 第 37 周", "下一期 · 7 月". */

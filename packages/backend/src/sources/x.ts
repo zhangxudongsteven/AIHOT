@@ -1,3 +1,4 @@
+import type { SpaceContext } from "../spaces/context.ts";
 // X accounts via SocialData search, newest first. Verified publishers include their own thread
 // continuations; other replies stay excluded. Plain accounts share length-bounded search shards.
 import { searchTweets, tweetMedia, tweetText, type SdArticle, type SdTweet } from "../providers/socialdata.ts";
@@ -117,12 +118,12 @@ export interface XFetch extends Omit<XRead, "tweets"> {
  * the old watermark, so nothing in between is skipped. Without a watermark (a source's very first
  * fetch) one page is read: its import is bounded anyway.
  */
-export async function readXSearch(base: string, opts: { lastId: string | null; backlog: XBacklog[]; subject: string; type?: "Latest" | "Top" }): Promise<XRead> {
+export async function readXSearch(base: string, opts: { context?: SpaceContext; lastId: string | null; backlog: XBacklog[]; subject: string; type?: "Latest" | "Top" }): Promise<XRead> {
   const { lastId } = opts;
   const backlog = opts.backlog.map((b) => ({ ...b }));
   const window = windowKey();
   const search = (query: string, cursor: string | null) =>
-    searchTweets(query, { purpose: "source_fetch", subject: opts.subject, window, type: opts.type ?? "Latest", cursor });
+    searchTweets(query, { context: opts.context, purpose: "source_fetch", subject: opts.subject, window, type: opts.type ?? "Latest", cursor });
   const all: SdTweet[] = [];
   const receiptIds = new Set<number>();
   const query = lastId ? `${base} since_id:${lastId}` : base;
@@ -198,6 +199,7 @@ export async function fetchXSearch(source: SourceRow, since?: string): Promise<X
     lastId: since ?? source.cursor?.lastTweetId ?? null,
     backlog: Array.isArray(source.cursor?.xBacklog) ? source.cursor.xBacklog : [],
     subject: `source:${source.id}`,
+    context: source.context,
     type: source.config.searchType ?? "Latest",
   });
   return { candidates: tweets.map(tweetToCandidate), ...read };

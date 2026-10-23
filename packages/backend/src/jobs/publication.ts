@@ -21,13 +21,13 @@ async function progress(sourceId: string, value: Record<string, unknown>) {
 }
 
 export async function registerPublicationJobs(boss: PgBoss) {
-  await work(boss, QUEUES.republishSource, { localConcurrency: 1, pollingIntervalSeconds: 2 }, async ({ sourceId }) => {
+  await work(boss, QUEUES.republishSource, { localConcurrency: 1, pollingIntervalSeconds: 2 }, async ({ sourceId, context }) => {
     const startedAt = new Date().toISOString();
     await progress(sourceId, { status: "running", done: 0, total: null, startedAt });
     const result = await republishSource(sourceId, (done, total) => progress(sourceId, { status: "running", done, total, startedAt }));
     if (result.reduced > 0) {
       // The hot board may show one of the source's articles: re-rank now rather than within five minutes.
-      await computeHotRanking();
+      await computeHotRanking(new Date(), { context });
     }
     // Names and redistribution rights are also read live, without changing selected/body-mode.
     if (result.total > 0) await emit("sourceRepublished", { sourceId });

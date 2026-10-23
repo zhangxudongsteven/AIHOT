@@ -8,7 +8,9 @@ import { upsertMaterial } from "@aihot/backend/content/materials";
 import { stopBoss } from "@aihot/backend/jobs/queue";
 import { publishArticle, publishArticleTx } from "@aihot/backend/publication/publish";
 import { composeDaily } from "@aihot/backend/reports/compose";
-import { candidates } from "@aihot/backend/reports/edition";
+import { candidates, periodEntries } from "@aihot/backend/reports/edition";
+import { loadReport } from "@aihot/backend/publication/reports";
+import { defaultSpaceConfig, storeSpaceConfig } from "@aihot/backend/spaces/context";
 
 const T = tag();
 const SOURCE = `test-report-boundary-${T}`;
@@ -45,6 +47,43 @@ async function selected(label: string, timelineAt: Date, releasedAt: Date): Prom
   assert.equal(published?.selected, true);
   return articleId;
 }
+
+test("default daily and period candidates exclude another channel's published reports", async () => {
+  const spaceId = `report-space-${T}`;
+  const sourceId = `report-source-${T}`;
+  await sql`INSERT INTO spaces (id, slug) VALUES (${spaceId}, ${spaceId})`;
+  const context = await storeSpaceConfig(spaceId, defaultSpaceConfig());
+  await sql`UPDATE spaces SET active_config_version = ${context.configVersion} WHERE id = ${spaceId}`;
+  await sql`INSERT INTO sources (id, name, kind, tier, participation_mode, space_id)
+    VALUES (${sourceId}, 'Internal source', 'rss', 'T1', 'editorial', ${spaceId})`;
+  const cutoff = editionAt("daily", "2020-05-02");
+  const arrived = editionAt("daily", "2020-05-02", -120);
+  const released = editionAt("daily", "2020-05-02", -60);
+  const defaultId = await selected("default-channel", arrived, released);
+  const { articleId } = await upsertMaterial({ sourceId, url: `https://example.com/report-space-${T}`,
+    title: 'Internal channel notice', bodyText: 'Only the second channel should carry this material.', bodyStatus: 'ok',
+    publishedAt: arrived, discoveredAt: arrived, via: 'fetch' }, sql, context);
+  const privateTitle = `第二频道内容-${T}`;
+  await sql`INSERT INTO analyses (space_id, article_id, input_revision, origin, config_version, relevance, category, title_zh, summary_zh, score, selected)
+    VALUES (${spaceId}, ${articleId}, 1, 'rule', ${context.configVersion}, 'pass', 'ai-models', ${privateTitle}, '第二频道摘要', 100, true)`;
+  assert.equal((await publishArticle(articleId, { now: released, releasedAt: released }))?.selected, true);
+  const found = await candidates(editionAt("daily", "2020-05-01"), cutoff);
+  assert.ok(found.some(c => c.itemId === defaultId));
+  assert.ok(!found.some(c => c.itemId === articleId));
+  await composeDaily("2020-05-02");
+  const report = await loadReport("daily", "2020-05-02");
+  assert.ok(report?.sections.some(s => s.items.some(i => i.itemId === defaultId)));
+  assert.ok(!JSON.stringify(report).includes(privateTitle));
+  assert.ok(!(await periodEntries("2020-05-02", "2020-05-02")).entries.some(e => e.itemId === articleId));
+  // A stale/imported citation cannot introduce a foreign publication into a newly composed period.
+  await sql`UPDATE reports SET content = jsonb_set(content, '{sections,0,items}',
+    (content #> '{sections,0,items}') || ${sql.json([{ itemId: articleId, title: privateTitle }])})
+    WHERE kind = 'daily' AND key = '2020-05-02'`;
+  const period = await periodEntries("2020-05-02", "2020-05-02");
+  assert.ok(period.entries.some(e => e.itemId === defaultId));
+  assert.ok(!period.entries.some(e => e.itemId === articleId));
+  assert.ok(!JSON.stringify(await loadReport("daily", "2020-05-02")).includes(privateTitle), 'a foreign frozen citation is not a withdrawn public title');
+});
 
 test("reports assign delayed and boundary releases to the period readers first see them", async () => {
   const onTime = await selected("on-time", editionAt("daily", "2020-01-02", -120), editionAt("daily", "2020-01-02", -60));
@@ -113,7 +152,7 @@ for (const lock of ["article", "fact seat", "report snapshot"] as const) {
     const holding = sql.begin(async (tx) => {
       if (lock === "article") await tx`SELECT 1 FROM articles WHERE id = ${id} FOR UPDATE`;
       else if (fact) await tx`SELECT pg_advisory_xact_lock(hashtext(${`seat:${fact.id}`}))`;
-      else await tx`SELECT pg_advisory_xact_lock(hashtext('report_candidates'))`;
+      else await tx`SELECT pg_advisory_xact_lock(hashtext('report_candidates:default'))`;
       const [row] = await tx<{ pid: number }[]>`SELECT pg_backend_pid() AS pid`;
       acquired.open(row!.pid);
       await release.promise;

@@ -1,6 +1,10 @@
+import type { SpaceContext } from "../spaces/context.ts";
 import type { MaterialInput } from "../content/materials.ts";
 
 export interface SourceRow {
+  /** Absent only for legacy default-space drafts; stored sources always include it. */
+  space_id?: string;
+  context?: SpaceContext;
   id: string;
   name: string;
   kind: "rss" | "web_list" | "json_list" | "x_search" | "mp_account" | "external";

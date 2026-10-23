@@ -14,6 +14,9 @@ import { config } from '@aihot/backend/config';
 import { installModules, type SitemapEntry } from '@aihot/backend/modules';
 import { loadDiscoveryEntries } from '@aihot/backend/publication/sitemap';
 import { submitIndexNow } from '@aihot/backend/operations/indexnow';
+import { upsertMaterial } from '@aihot/backend/content/materials';
+import { publishArticle } from '@aihot/backend/publication/publish';
+import { defaultSpaceConfig, storeSpaceConfig } from '@aihot/backend/spaces/context';
 
 const originalFetch = globalThis.fetch;
 const originalEnabled = config.indexNowSubmitEnabled;
@@ -63,6 +66,33 @@ test('discovery dates follow page content and publication scope', async () => {
   assert.ok(entries.some(e => e.loc === '/items/dates-visible'));
   assert.ok(!entries.some(e => e.loc === '/items/dates-future'));
   assert.ok(!entries.some(e => e.loc === '/items/dates-signal'));
+});
+
+test('another channel creates no default discovery URLs or IndexNow submissions', async () => {
+  const batches = capture();
+  const now = new Date();
+  await submitIndexNow(now);
+  const before = await loadDiscoveryEntries(now);
+  const spaceId = `discovery-${randomUUID()}`;
+  await sql`INSERT INTO spaces (id, slug) VALUES (${spaceId}, ${spaceId})`;
+  const context = await storeSpaceConfig(spaceId, defaultSpaceConfig());
+  await sql`UPDATE spaces SET active_config_version = ${context.configVersion} WHERE id = ${spaceId}`;
+  const sourceId = `source-${spaceId}`;
+  await sql`INSERT INTO sources (id, space_id, name, kind, tier) VALUES (${sourceId}, ${spaceId}, 'Internal source', 'rss', 'T1')`;
+  const { articleId } = await upsertMaterial({ sourceId, url: `https://example.org/${spaceId}`, title: '内部频道公告',
+    bodyText: '只属于另一个频道的材料。', bodyStatus: 'ok', publishedAt: now, discoveredAt: now, via: 'fetch' }, sql, context);
+  await sql`INSERT INTO analyses (space_id, article_id, input_revision, origin, config_version, relevance, category, title_zh, summary_zh, score, selected)
+    VALUES (${spaceId}, ${articleId}, 1, 'rule', ${context.configVersion}, 'pass', 'ai-models', '内部频道公告', '内部频道摘要。', 100, true)`;
+  const storyPublicId = randomUUID();
+  const [story] = await sql<{ id: number }[]>`INSERT INTO stories (space_id, public_id, title) VALUES (${spaceId}, ${storyPublicId}, '内部频道事件') RETURNING id`;
+  const [fact] = await sql<{ id: number }[]>`INSERT INTO facts (space_id, public_id, story_id, title) VALUES (${spaceId}, ${randomUUID()}, ${story!.id}, '内部频道事实') RETURNING id`;
+  await sql`INSERT INTO fact_articles (space_id, fact_id, article_id, role) VALUES (${spaceId}, ${fact!.id}, ${articleId}, 'primary')`;
+  assert.equal((await publishArticle(articleId, { now, releasedAt: now }))?.selected, true);
+  const after = await loadDiscoveryEntries(now);
+  assert.ok(!after.some(e => e.loc === `/items/${articleId}` || e.loc === `/story/${storyPublicId}`));
+  assert.deepEqual(after, before, 'foreign publication does not change default page identities');
+  assert.equal((await submitIndexNow(now)).status, 'empty');
+  assert.equal(batches.length, 1, 'only the default inventory was acknowledged');
 });
 
 test('dry runs leave changes pending, corrections and disappeared URLs are submitted again', async () => {
