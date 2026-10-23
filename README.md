@@ -21,12 +21,12 @@
 使用 Node.js 24、PostgreSQL 17 和 npm workspaces。完整初始化、私有连接文件及进程启动方式见[本地开发说明](docs/local-development.md)。开发时保持真实采集、模型调用、飞书和 IndexNow 外发关闭。
 
 ```bash
-git clone --branch codex/prepare-development https://github.com/zhangxudongsteven/AIHOT.git
+git clone --branch main https://github.com/zhangxudongsteven/AIHOT.git
 cd AIHOT
 npm ci
 ```
 
-在当前开发分支接续工作，完整的新机步骤见[新机器开发与部署](docs/new-machine-setup.md)。Git 只携带代码、模板和文档；数据库、文件卷和实际凭证需单独准备。远程分支以 `git ls-remote` / `git fetch` 核验，新机器不要直接使用仍停留在旧基线的默认分支。
+以本仓库的 `main` 为开发与部署基线，后续开发从 `main` 新建分支并通过 PR 合并。完整的新机步骤见[新机器开发与部署](docs/new-machine-setup.md)。Git 只携带代码、模板和文档；数据库、文件卷和实际凭证需单独准备。远程分支与提交以 `git ls-remote` / `git fetch` 核验。
 
 站点定制见[配置说明](docs/customize.md)，多频道配置、显式数据库切换和升级边界见[频道说明](docs/multi-space-development.md)。Docker 和其他部署方式见[部署文档](docs/deploy.md)。默认示范信源与行业配置不是已经批准的正式业务配置。
 
@@ -49,7 +49,7 @@ node scripts/smoke.ts --base http://127.0.0.1:3000
 | [CHANGELOG.md](CHANGELOG.md) | 本项目开发版本、未发布改动与升级摘要 |
 | [site/changelog.json](site/changelog.json) | 本站读者看到的更新日志，独立于上游历史 |
 | [开发计划](docs/development-plan.md) | 业务范围、开发阶段与尚缺输入 |
-| [新机器开发与部署](docs/new-machine-setup.md) | 获取当前分支、隔离开发/运行数据、恢复私有配置与验收 |
+| [新机器开发与部署](docs/new-machine-setup.md) | 获取 main 基线、隔离开发/运行数据、恢复私有配置与验收 |
 | [已知问题](docs/known-issues.md) | MS-001～MS-007 的复现、影响和修复验收 |
 | [频道说明](docs/multi-space-development.md) | 配置、任务、公开出口、报告、推送及配额 |
 | [架构](docs/architecture.md) | Web/API/worker、模块、数据库迁移与公开读取层 |

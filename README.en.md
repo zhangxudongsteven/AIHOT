@@ -21,12 +21,12 @@ The first independently maintained development baseline is **4.1.0** at commit `
 Use Node.js 24, PostgreSQL 17, and npm workspaces. Follow the [local development guide](docs/local-development.md) for database setup, private connection files, and process startup. Keep real collection, model calls, Feishu delivery, and IndexNow submission disabled during development.
 
 ```bash
-git clone --branch codex/prepare-development https://github.com/zhangxudongsteven/AIHOT.git
+git clone --branch main https://github.com/zhangxudongsteven/AIHOT.git
 cd AIHOT
 npm ci
 ```
 
-Continue on this development branch using the [new-machine guide](docs/new-machine-setup.md). Git contains code, templates, and documentation; databases, file volumes, and credentials require separate preparation. Verify the remote branch with `git ls-remote` or `git fetch` instead of using the default branch's older baseline.
+Use this repository's `main` as the development and deployment baseline. Create branches from `main` for further development and merge through pull requests. Follow the [new-machine guide](docs/new-machine-setup.md) for setup. Git contains code, templates, and documentation; databases, file volumes, and credentials require separate preparation. Verify the remote branch and commit with `git ls-remote` or `git fetch`.
 
 See the [customization guide](docs/customize.md), [channel guide](docs/multi-space-development.md), and [deployment guide](docs/deploy.md) for configuration and upgrade requirements. Example industry data and sources are not approved production configuration.
 
@@ -50,7 +50,7 @@ The detailed documents are in Chinese.
 | [site/changelog.json](site/changelog.json) | Updates displayed to this site's readers |
 | [Maintenance policy](docs/fork-maintenance.md) | Independent versioning, upstream references, and release records |
 | [Development plan](docs/development-plan.md) | Scope, milestones, and pending business inputs |
-| [New-machine setup](docs/new-machine-setup.md) | Fetching the development branch, isolating data, restoring private configuration, and validation |
+| [New-machine setup](docs/new-machine-setup.md) | Fetching the main baseline, isolating data, restoring private configuration, and validation |
 | [Known issues](docs/known-issues.md) | Reproduction, impact, and acceptance criteria for MS-001 through MS-007 |
 | [Channel guide](docs/multi-space-development.md) | Configuration, processing, public endpoints, reports, notifications, and quotas |
 | [Architecture](docs/architecture.md) | Web/API/worker, modules, migrations, and the public read layer |

@@ -36,7 +36,7 @@ chmod 600 .env.lan
 
 ## 部署与更新
 
-把本项目源码放到服务器专用目录，例如 `/opt/myhot/app`。按[新机器说明](new-machine-setup.md)获取 `codex/prepare-development` 分支，核对提交和部署文件；不要误用仍停留在旧基线的默认分支。本机 `node_modules`、`.data`、构建缓存和私有环境文件不随源码复制。`.env.lan` 单独放在服务器项目根目录，权限保持 0600。
+把本项目源码放到服务器专用目录，例如 `/opt/myhot/app`。按[新机器说明](new-machine-setup.md)获取本仓库的 `main` 分支，核对提交和部署文件。本机 `node_modules`、`.data`、构建缓存和私有环境文件不随源码复制。`.env.lan` 单独放在服务器项目根目录，权限保持 0600。
 
 首次部署和后续更新均在服务器的项目目录执行：
 

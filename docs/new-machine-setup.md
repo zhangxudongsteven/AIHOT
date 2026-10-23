@@ -4,18 +4,18 @@
 
 本文记录获取与验证步骤，不代表目标机器已部署，也不单独证明提交已推送。远程分支及提交以 `git fetch` / `git ls-remote` 的实际结果为准。
 
-## 1. 获取当前开发分支
+## 1. 获取 main 基线
 
 在新的开发目录执行：
 
 ```bash
-git clone --branch codex/prepare-development https://github.com/zhangxudongsteven/AIHOT.git
+git clone --branch main https://github.com/zhangxudongsteven/AIHOT.git
 cd AIHOT
 git status --short --branch
 git log -1 --format='%h %s'
 ```
 
-后续在这个分支接续时，先处理本机未提交的修改，再执行 `git pull --ff-only`。不要从上游仓库的默认分支代替当前分支；本项目已独立维护，规则见 [维护约定](fork-maintenance.md)。
+后续更新本仓库的 `main` 时，先处理本机未提交的修改，再执行 `git pull --ff-only`。开发新功能时从 `main` 新建 `codex/` 前缀的分支，并通过 PR 合并。本项目已独立维护，使用当前仓库的 `main`，维护规则见 [维护约定](fork-maintenance.md)。
 
 先读 [README](../README.md)、[开发计划](development-plan.md)、[已知问题](known-issues.md) 和 [本轮交接验证](reports/2026-10-23-new-machine-handoff.md)。提交和测试结果需要与实际 checkout 对应，旧机器曾通过的测试不能代替新机器的检查。
 
