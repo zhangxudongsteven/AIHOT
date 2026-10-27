@@ -339,10 +339,10 @@ test("new-channel target initialization never inherits the default webhook secre
   assert.ok(rows.every(x=>JSON.stringify(x.subject_kinds)==='["selected"]'));
 });
 
-async function channelReport(context: SpaceContext,key: string, contentAt = new Date(Date.now()-60_000)) {
-  const [report] = await sql<{id:number}[]>`INSERT INTO reports(space_id,config_version,kind,key,window_start,window_end,content,generated_at)
+async function channelReport(context: SpaceContext,key: string, contentAt = new Date(Date.now()-60_000), publishedAt = new Date()) {
+  const [report] = await sql<{id:number}[]>`INSERT INTO reports(space_id,config_version,kind,key,window_start,window_end,content,generated_at,created_at)
     VALUES(${context.spaceId},${context.configVersion},'daily',${key},${new Date(contentAt.getTime()-86400000)},${contentAt},
-      ${sql.json({lead:{title:`日报 ${context.spaceId}`,leadParagraph:'该频道日报摘要'},sections:[],metrics:{totalEvents:0}})},now()) RETURNING id`;
+      ${sql.json({lead:{title:`日报 ${context.spaceId}`,leadParagraph:'该频道日报摘要'},sections:[],metrics:{totalEvents:0}})},${publishedAt},${publishedAt}) RETURNING id`;
   return report!.id;
 }
 
@@ -371,9 +371,9 @@ test("same-day reports require explicit report subscriptions and stay within cha
   assert.equal(requests.length-before,2,'replayed jobs never resend an existing report');
 });
 
-test("report backfills stay silent and manual recovery rebuilds corrected public content", async () => {
+test("previously published reports stay silent and manual recovery rebuilds corrected public content", async () => {
   const a=await channel('report-recovery');
-  const old=await channelReport(a.context,'2026-10-19',new Date(Date.now()-86400000));
+  const old=await channelReport(a.context,'2026-10-19',new Date(Date.now()-86400000),new Date(Date.now()-86400000));
   await sql`UPDATE notify_targets SET enabled_at=now()-interval '1 hour' WHERE key=${a.target}`;
   const before=requests.length;
   assert.equal((await pushReport(old,a.context)).status,'skipped');
@@ -389,4 +389,20 @@ test("report backfills stay silent and manual recovery rebuilds corrected public
   await sql`UPDATE deliveries SET status='unknown' WHERE id=${delivery!.id}`;
   await sql`DELETE FROM reports WHERE id=${id}`;
   await assert.rejects(resendDelivery(delivery!.id,undefined,a.context),/不再符合/);
+});
+
+test("report subscriptions use first publication rather than the statistical window or regeneration time", async () => {
+  const a = await channel('report-subscription');
+  await sql`UPDATE notify_targets SET enabled_at=now()-interval '1 hour' WHERE key=${a.target}`;
+  const id = await channelReport(a.context, '2026-10-22', new Date(Date.now()-86400000));
+  await sql`UPDATE reports SET kind='weekly' WHERE id=${id}`;
+  const before = requests.length;
+  assert.equal((await pushReport(id, a.context)).status, 'pushed', 'a newly published issue reaches subscribers even when its window ended yesterday');
+  assert.equal(requests.length, before+1);
+  await pushReport(id, a.context);
+  assert.equal(requests.length, before+1, 'retry does not duplicate the issue');
+  const old = await channelReport(a.context, '2026-10-23', new Date(Date.now()-86400000), new Date(Date.now()-7200000));
+  await sql`UPDATE reports SET generated_at=now(),revision=revision+1 WHERE id=${old}`;
+  assert.equal((await pushReport(old, a.context)).status, 'skipped', 'regeneration does not make an older issue new to a later subscriber');
+  assert.equal(requests.length, before+1);
 });

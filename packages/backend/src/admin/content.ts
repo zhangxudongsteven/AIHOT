@@ -5,7 +5,8 @@
 import { z } from "zod";
 import { correctReportClassification } from "../reports/correct.ts";
 import type { AdminContentChain, AdminContentRow, AdminPublication, AdminPresentationRefresh, AdminRerun, BeforeJson } from "@aihot/contracts/admin";
-import { ARTICLE_ID_PATTERN, CATEGORY_KEYS } from "@aihot/contracts/taxonomy";
+import { ARTICLE_ID_PATTERN } from "@aihot/contracts/taxonomy";
+import { configForContext, resolveSpaceContext } from "../spaces/context.ts";
 import { sql, type Db, type Tx } from "../db.ts";
 import { enqueue, QUEUES } from "../jobs/queue.ts";
 import { needsGrouping, queueProcessing } from "../jobs/content.ts";
@@ -237,10 +238,10 @@ const STALE = "这条内容的人工设置已被修改，请刷新后再操作";
 
 async function overrideRow(id: string, tx: Tx) {
   // Use the same first lock as publication and automatic processing, including the first correction.
-  const [article] = await tx`SELECT id FROM articles WHERE id = ${id} FOR UPDATE`;
+  const [article] = await tx<{ space_id: string }[]>`SELECT id, space_id FROM articles WHERE id = ${id} FOR UPDATE`;
   if (!article) throw Object.assign(new Error("内容不存在"), { statusCode: 400 });
   const [o] = await tx<{ fields: Record<string, unknown>; visibility: string | null; version: number }[]>`SELECT fields, visibility, version FROM editorial_overrides WHERE article_id = ${id}`;
-  return o ?? { fields: {}, visibility: null, version: 0 };
+  return { ...(o ?? { fields: {}, visibility: null, version: 0 }), spaceId: article.space_id };
 }
 
 /**
@@ -290,7 +291,7 @@ const FieldsSchema = z
     title: z.string().min(1).max(300),
     summary: z.string().max(2000),
     reason: z.string().max(1000),
-    category: z.enum(CATEGORY_KEYS as unknown as [string, ...string[]]),
+    category: z.string().min(1).max(100),
     tags: z.array(z.string().max(60)).max(20),
     score: z.number().min(0).max(100).nullable(),
     selected: z.boolean(),
@@ -306,6 +307,10 @@ export async function overrideFields(id: string, input: { fields: unknown; clear
   const published = await sql.begin(async (tx) => {
     const before = await overrideRow(id, tx);
     if (before.version !== input.version) throw new Conflict(STALE);
+    const context = await resolveSpaceContext(before.spaceId, undefined, tx);
+    if (fields.category && !configForContext(context).categories.some(c => c.key === fields.category)) {
+      throw Object.assign(new Error("分类不属于此频道"), { statusCode: 400 });
+    }
     const next: Record<string, unknown> = { ...before.fields, ...fields };
     for (const k of input.clear ?? []) delete next[k];
     await tx`
@@ -315,7 +320,7 @@ export async function overrideFields(id: string, input: { fields: unknown; clear
     if (published?.changed) {
       await emit("articleChanged", { id, kind: "content", reduced: published.reduced, reason: "manual correction" }, tx);
       const changedFields = new Set([...Object.keys(fields), ...(input.clear ?? [])]);
-      if (changedFields.has("category") || changedFields.has("tags")) await correctReportClassification(tx, id, input.reason);
+      if (changedFields.has("category") || changedFields.has("tags")) await correctReportClassification(tx, id, input.reason, context);
       const [st] = await tx<{ story_id: number | null }[]>`SELECT story_id FROM publications WHERE article_id = ${id}`;
       if (st?.story_id && [...changedFields].some(k => k !== "category" && k !== "tags")) {
         await enqueue(QUEUES.digest, { storyId: st.story_id }, { singletonKey: `story:${st.story_id}` }, tx);

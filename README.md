@@ -8,11 +8,14 @@
 
 ## 当前状态
 
+当前项目版本为 **4.2.0**，公开协议版本保持 **4.1.0**；版本标签 `v4.2.0` 对应源码归档，不代表线上已升级。
+
 首个自维护开发基线为 **4.1.0**（提交 `b0ea3ed`），上游代码基线为 `b3998dc6fc138eb9659f33f55eb38c1c716f0d57`。这些版本记录只代表本项目，不代表上游发行版。
 
 - DEV-01～DEV-05 已接入频道配置快照、采集与处理上下文、网站切换及公开出口、独立报告、通知订阅和请求配额。
-- 本轮交接准备通过后端 1033/1033、Web 66/66、类型检查和构建，范围与首轮失败记录见[交接验证](docs/reports/2026-10-23-new-machine-handoff.md)；新机器仍需重新验证。此前结果见[评审记录](docs/reports/2026-10-23-review.md)和 [LAN 验证记录](docs/reports/2026-10-23-lan-deployment.md)。
-- 评审确认的 [7 项问题](docs/known-issues.md)仍待后续版本修复；完整测试通过不表示这些问题已经关闭。
+- 4.2.0 本地后端 1046/1046、Web 66/66、类型检查、构建及 smoke/MCP 通过，见[本轮验证](docs/reports/2026-10-27-ai-security-channels.md)。此前交接通过后端 1033/1033、Web 66/66、类型检查和构建，范围与首轮失败记录见[交接验证](docs/reports/2026-10-23-new-machine-handoff.md)；新机器仍需重新验证。此前结果见[评审记录](docs/reports/2026-10-23-review.md)和 [LAN 验证记录](docs/reports/2026-10-23-lan-deployment.md)。
+- 评审登记的 [7 项问题](docs/known-issues.md)中，MS-001、MS-003、MS-005、MS-006 已修复并归入 4.2.0（实现提交 `e341acb`）；其余三项待修。
+- [AI 与网络安全双频道准备](docs/ai-security-channels.md)增加按频道管理信源、独立筛选评测及两套候选配置；来源保持禁用，安全门槛未校准，线上环境未改动。本地验证见[开发记录](docs/reports/2026-10-27-ai-security-channels.md)。
 - 已通过 TokenHub 完成一次真实 DeepSeek 请求、回执复用及配额验证，见[联调记录](docs/reports/2026-10-23-deepseek-integration.md)；完整内容流水线和飞书推送尚未验收，常驻外发保持关闭。
 - 短期在 MacBook Pro 原生运行 PostgreSQL 17，Compose 仅管理应用；[部署模板](docs/macbook-deployment.md)已准备，目标机器尚未部署。正式安全证据、资产影响与处置流程、业务验收及 GKE 部署仍待后续推进。
 

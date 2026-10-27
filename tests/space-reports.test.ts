@@ -11,6 +11,7 @@ import { configForContext, defaultSpaceConfig, storeSpaceConfig, type SpaceConte
 import { composeDaily, composeWeekly, composeMonthly, composeDueReports, dueDaily, periodPrompt } from "@aihot/backend/reports/compose";
 import { dailyMemory } from "@aihot/backend/reports/edition";
 import { correctReportClassification } from "@aihot/backend/reports/correct";
+import { overrideFields } from "@aihot/backend/admin/content";
 import { withPublicationSpace } from "@aihot/backend/publication/context";
 import { feedIssues, listReports, loadReport, v1Daily, v1Period } from "@aihot/backend/publication/reports";
 import { loadDiscoveryEntries } from "@aihot/backend/publication/sitemap";
@@ -130,6 +131,28 @@ test("memory, regeneration and classification corrections use only their own rep
   await sql`UPDATE publications SET category = ${a.category} WHERE article_id = ${ai}`;
   assert.equal(await sql.begin(tx => correctReportClassification(tx, ai, "旧快照更正", a.context)), false);
   assert.deepEqual(await saved(a, "daily", "2024-03-04"), current);
+});
+
+test("an admin correction validates the owning channel and revises only its reports", async () => {
+  const own = await channel('安全更正');
+  const other = await channel('AI更正');
+  const id = await item(own, '2024-03-10');
+  await item(other, '2024-03-10');
+  await sql`UPDATE articles SET processing_config_version=${own.context.configVersion},grouping_status='complete' WHERE id=${id}`;
+  await sql`INSERT INTO analyses(space_id,article_id,input_revision,origin,config_version,relevance,title_zh,summary_zh,selected,score,category)
+    VALUES(${own.context.spaceId},${id},1,'model',${own.context.configVersion},'pass','安全更正公告','公告说明影响范围与修复版本。',true,90,${own.category})`;
+  await Promise.all([composeDaily('2024-03-10', undefined, own.context), composeDaily('2024-03-10', undefined, other.context)]);
+  const beforeOther = await saved(other, 'daily', '2024-03-10');
+  await assert.rejects(overrideFields(id, { fields: { category: other.second }, version: 0, reason: '错误频道分类' }, 'test'), /分类不属于此频道/);
+  assert.equal((await sql`SELECT 1 FROM editorial_overrides WHERE article_id=${id}`).length, 0);
+  const changed = await overrideFields(id, { fields: { category: own.second }, version: 0, reason: '更正安全栏目' }, 'test');
+  assert.equal(changed?.changed, true);
+  assert.equal((await sql`SELECT category FROM publications WHERE article_id=${id}`)[0]!.category, own.second);
+  const report = await saved(own, 'daily', '2024-03-10');
+  assert.equal(report.revision, 2);
+  assert.equal(report.content.sections[0].label, '安全更正研究');
+  assert.equal(report.config_version, own.context.configVersion);
+  assert.deepEqual(await saved(other, 'daily', '2024-03-10'), beforeOther);
 });
 
 test("missing candidates in one channel do not suppress another channel and schedules retain snapshot times", async () => {

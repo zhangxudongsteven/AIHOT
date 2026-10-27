@@ -5,6 +5,7 @@ import { z } from "zod";
 import { sql } from "@aihot/backend/db";
 import { modelFor } from "@aihot/backend/editorial/models";
 import { MODELS } from "@aihot/backend/providers/llm";
+import { configForContext, type SpaceContext } from "@aihot/backend/spaces/context";
 
 /**
  * The cases of a JSONL file, one per line (blank lines and lines starting with // are skipped), each
@@ -90,11 +91,12 @@ export function positiveInt(value: string, name: string): number {
   return parsed;
 }
 
-/** --models as given (`default` or the site's presets), else the model the step uses now. */
-export async function evalModels(list: string | undefined, step: string): Promise<string[]> {
-  const models = list ? list.split(",").map((model) => model.trim()).filter(Boolean) : [await modelFor(step)];
+/** --models as given, else the step's choice; a channel uses only models in its resolved snapshot. */
+export async function evalModels(list: string | undefined, step: string, context?: SpaceContext): Promise<string[]> {
+  const models = list ? list.split(",").map((model) => model.trim()).filter(Boolean) : [await modelFor(step, context)];
   if (!models.length) throw new Error("--models did not name any models");
-  for (const model of models) if (!MODELS[model]) throw new Error(`unknown model ${model}`);
+  const registered = context ? configForContext(context).modelSpecs : MODELS;
+  for (const model of models) if (!registered[model]) throw new Error(`unknown model ${model}`);
   return models;
 }
 

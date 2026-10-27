@@ -14,10 +14,19 @@ export function configForContext(context: SpaceContext): SpaceConfig {
 }
 
 export async function resolveSpaceContext(spaceId: string, configVersion?: string, db: Db = sql): Promise<SpaceContext> {
+  return resolveContext(spaceId, configVersion, db, true);
+}
+
+/** Configuration preparation is allowed while a channel is disabled; collection and jobs are not. */
+export async function resolveSpaceAdminContext(spaceId: string, configVersion?: string, db: Db = sql): Promise<SpaceContext> {
+  return resolveContext(spaceId, configVersion, db, false);
+}
+
+async function resolveContext(spaceId: string, configVersion: string | undefined, db: Db, requireEnabled: boolean): Promise<SpaceContext> {
   if (!spaceId?.trim() || (configVersion !== undefined && !configVersion.trim())) throw new Error("A space and its configuration version must be explicit");
   const [space] = await db<{ enabled: boolean; active_config_version: string | null }[]>`SELECT enabled, active_config_version FROM spaces WHERE id = ${spaceId}`;
   if (!space) throw new Error(`Unknown space: ${spaceId}`);
-  if (!space.enabled) throw new Error(`Space is disabled: ${spaceId}`);
+  if (requireEnabled && !space.enabled) throw new Error(`Space is disabled: ${spaceId}`);
   const version = configVersion ?? space.active_config_version;
   if (!version) throw new Error(`Space has no active configuration: ${spaceId}`);
   const context = Object.freeze({ spaceId, configVersion: version });

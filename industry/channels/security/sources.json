@@ -1,0 +1,88 @@
+{
+  "sources": [
+    {
+      "id": "sec-rss-google-cloud-bulletins",
+      "name": "Google Cloud Security Bulletins",
+      "kind": "rss",
+      "config": { "feedUrl": "https://docs.cloud.google.com/feeds/google-cloud-security-bulletins.xml", "acceptLanguage": "en-US,en;q=0.9", "_aihot": { "initialBackfillLimit": 8 } },
+      "tier": "T1",
+      "owner_entity_id": "google",
+      "participation_mode": "editorial",
+      "interval_minutes": 30,
+      "tags": ["官方", "云安全", "候选"],
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "enabled": false
+    },
+    {
+      "id": "sec-rss-msrc",
+      "name": "Microsoft MSRC",
+      "kind": "rss",
+      "config": { "feedUrl": "https://api.msrc.microsoft.com/update-guide/rss", "acceptLanguage": "en-US,en;q=0.9", "_aihot": { "initialBackfillLimit": 8 } },
+      "tier": "T1",
+      "owner_entity_id": "microsoft",
+      "participation_mode": "editorial",
+      "interval_minutes": 60,
+      "tags": ["官方", "漏洞", "候选"],
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "enabled": false
+    },
+    {
+      "id": "sec-rss-oss-security",
+      "name": "oss-security · SecLists mirror",
+      "kind": "rss",
+      "config": { "feedUrl": "https://seclists.org/rss/oss-sec.rss", "acceptLanguage": "en-US,en;q=0.9", "_aihot": { "initialBackfillLimit": 8 } },
+      "tier": "T2",
+      "owner_entity_id": null,
+      "participation_mode": "editorial",
+      "interval_minutes": 30,
+      "tags": ["开源安全", "邮件列表镜像", "候选"],
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "enabled": false
+    },
+    {
+      "id": "sec-rss-github-security",
+      "name": "GitHub Blog · Security",
+      "kind": "rss",
+      "config": { "feedUrl": "https://github.blog/security/feed/", "acceptLanguage": "en-US,en;q=0.9", "_aihot": { "initialBackfillLimit": 8 } },
+      "tier": "T1",
+      "owner_entity_id": "github",
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": ["官方", "研发安全", "候选"],
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "enabled": false
+    },
+    {
+      "id": "sec-rss-cloudflare-security",
+      "name": "Cloudflare Blog · Security",
+      "kind": "rss",
+      "config": { "feedUrl": "https://blog.cloudflare.com/tag/security/rss/", "acceptLanguage": "en-US,en;q=0.9", "_aihot": { "initialBackfillLimit": 8 } },
+      "tier": "T1",
+      "owner_entity_id": "cloudflare",
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": ["官方", "网络防护", "候选"],
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "enabled": false
+    },
+    {
+      "id": "sec-rss-kubernetes-blog",
+      "name": "Kubernetes Blog",
+      "kind": "rss",
+      "config": { "feedUrl": "https://kubernetes.io/feed.xml", "acceptLanguage": "en-US,en;q=0.9", "_aihot": { "initialBackfillLimit": 8 } },
+      "tier": "T1",
+      "owner_entity_id": "kubernetes",
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": ["官方", "云原生", "混合主题", "候选"],
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "enabled": false
+    }
+  ]
+}

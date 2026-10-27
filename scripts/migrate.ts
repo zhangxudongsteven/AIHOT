@@ -91,7 +91,7 @@ export async function runMigrations(sql: postgres.Sql, root: string, { backupWai
     // Bootstrap configuration after additive DDL, before any new application writes.
     if (migrations.some((m) => m.name === "0090_spaces.sql")) {
       const { ensureDefaultSpace } = await import("../packages/backend/src/spaces/context.ts");
-      await ensureDefaultSpace(sql as never);
+      await ensureDefaultSpace(session as never);
     }
     console.log(count === 0 ? "database is up to date" : `${count} migration(s) applied`);
     return count;

@@ -16,6 +16,7 @@ import { resolveDelivery } from "@aihot/backend/notify/deliver";
 import { notificationIdentity } from "@aihot/backend/notify/context";
 import { sql } from "@aihot/backend/db";
 import { getSpaceBudgets, setSpaceBudget } from "@aihot/backend/spaces/quotas";
+import { resolveSpaceAdminContext, type SpaceContext } from "@aihot/backend/spaces/context";
 import { releaseReceipt } from "@aihot/backend/operations/recover";
 import { configureContentTarget, listTargets, replaceContactQr, setTargetEnabled, settingsOverview, updateBudget } from "@aihot/backend/admin/settings";
 import { createSource, fetchNow, listSources, previewSource, previewStoredSource, sourceDetail, updateSource } from "@aihot/backend/admin/sources";
@@ -38,20 +39,34 @@ function decodeImage(dataUrl: unknown): Buffer {
 }
 
 export function registerAdmin(app: FastifyInstance) {
-  // Sources
-  app.get("/api/admin/sources", adminHandler(async (req) => {
-    const f = q(req);
-    return listSources({ q: f.q, kind: f.kind, health: f.health, mode: f.mode, enabled: f.enabled as "true" | "false" | undefined, page: page(req) });
-  }));
-  app.post("/api/admin/sources", adminHandler(async (req, _reply, admin) => createSource(body(req), actorOf(admin))));
-  app.post("/api/admin/sources/preview", adminHandler(async (req) => previewSource(body(req) as never)));
-  app.get("/api/admin/sources/:id", adminHandler(async (req, reply) => orNotFound(req, reply, await sourceDetail(param(req, "id")))));
-  app.patch("/api/admin/sources/:id", adminHandler(async (req, reply, admin) => {
-    const b = body<AdminSourceUpdate>(req);
-    return orNotFound(req, reply, await updateSource(param(req, "id"), b, actorOf(admin)));
-  }));
-  app.post("/api/admin/sources/:id/preview", adminHandler(async (req, reply) => orNotFound(req, reply, await previewStoredSource(param(req, "id")))));
-  app.post("/api/admin/sources/:id/fetch", adminHandler(async (req, reply, admin) => orNotFound(req, reply, await fetchNow(param(req, "id"), actorOf(admin)))));
+  // Legacy source addresses stay in default; explicit channel addresses share the same guard.
+  const sourceRoutes = (prefix: string, scoped = false) => {
+    const handler = (fn: (req: FastifyRequest, reply: FastifyReply, actor: string, context?: SpaceContext) => Promise<unknown>) => adminHandler(async (req, reply, admin) => {
+      let context: SpaceContext | undefined;
+      if (scoped) {
+        const spaceId = param(req, "spaceId");
+        const [space] = await sql`SELECT id FROM spaces WHERE id = ${spaceId}`;
+        if (!space) return notFound(req, reply);
+        context = await resolveSpaceAdminContext(spaceId);
+      }
+      return fn(req, reply, actorOf(admin), context);
+    });
+    app.get(prefix, handler(async (req, _reply, _actor, context) => {
+      const f = q(req);
+      return listSources({ q: f.q, kind: f.kind, health: f.health, mode: f.mode, enabled: f.enabled as "true" | "false" | undefined, page: page(req) }, context);
+    }));
+    app.post(prefix, handler(async (req, _reply, actor, context) => createSource(body(req), actor, context)));
+    app.post(`${prefix}/preview`, handler(async (req, _reply, _actor, context) => previewSource(body(req) as never, context)));
+    app.get(`${prefix}/:id`, handler(async (req, reply, _actor, context) => orNotFound(req, reply, await sourceDetail(param(req, "id"), context))));
+    app.patch(`${prefix}/:id`, handler(async (req, reply, actor, context) => {
+      const b = body<AdminSourceUpdate>(req);
+      return orNotFound(req, reply, await updateSource(param(req, "id"), b, actor, context));
+    }));
+    app.post(`${prefix}/:id/preview`, handler(async (req, reply, _actor, context) => orNotFound(req, reply, await previewStoredSource(param(req, "id"), context))));
+    app.post(`${prefix}/:id/fetch`, handler(async (req, reply, actor, context) => orNotFound(req, reply, await fetchNow(param(req, "id"), actor, context))));
+  };
+  sourceRoutes("/api/admin/sources");
+  sourceRoutes("/api/admin/spaces/:spaceId/sources", true);
 
   // Content and events
   app.get("/api/admin/content", adminHandler(async (req) => ({ rows: await searchContent(q(req).q ?? "") })));
