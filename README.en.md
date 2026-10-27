@@ -8,11 +8,14 @@ The application collects sources, selects and writes content, groups events, and
 
 ## Current state
 
+The current project version is **4.2.0**; the public protocol remains **4.1.0**. Tag `v4.2.0` records the source release, not a production deployment.
+
 The first independently maintained development baseline is **4.1.0** at commit `b0ea3ed`, based on upstream commit `b3998dc6fc138eb9659f33f55eb38c1c716f0d57`. This is this project's version, not an upstream release.
 
 - DEV-01 through DEV-05 implement versioned channel configuration, scoped collection and processing, website navigation and public endpoints, independent reports, notification subscriptions, and request quotas.
 - Handoff checks passed: 1033/1033 backend tests, 66/66 Web tests, type checking, and the Web build. See the [handoff validation](docs/reports/2026-10-23-new-machine-handoff.md) for scope and initial failed runs. A new machine still requires validation; earlier results are in the [review record](docs/reports/2026-10-23-review.md) and [LAN validation record](docs/reports/2026-10-23-lan-deployment.md).
-- [Seven confirmed issues](docs/known-issues.md) remain open for a later version. Passing tests does not close them.
+- MS-001, MS-003, MS-005, and MS-006 are fixed in 4.2.0 (implementation commit `e341acb`); MS-002, MS-004, and MS-007 remain [open](docs/known-issues.md).
+- 4.2.0 adds channel-scoped source management, snapshot-based selection evaluation, and AI/security candidate configurations. All candidates remain disabled and security thresholds are uncalibrated. The existing 1046/1046 backend and 66/66 Web results, type checking, build, smoke, and MCP checks are recorded in the [validation report](docs/reports/2026-10-27-ai-security-channels.md).
 - One real DeepSeek request through TokenHub, receipt reuse, and quota enforcement have been verified; see the [integration record](docs/reports/2026-10-23-deepseek-integration.md). The full content pipeline and Feishu delivery remain unverified, and persistent external-action flags remain disabled.
 - The short-term target is a MacBook Pro with native PostgreSQL 17 and application-only Compose. The [deployment template](docs/macbook-deployment.md) is ready, but the target machine has not been deployed. Security evidence, asset-response workflows, business acceptance, and GKE deployment remain pending.
 
