@@ -1,5 +1,8 @@
 # MacBook Pro 单机部署：原生 PostgreSQL + 应用 Compose
 
+本机实际运行状态及隔离 staging 操作见 [staging 部署](staging-deployment.md)；
+该环境使用独立分支、数据库、账号、卷、网络和 3200 端口。
+
 更新：2026-10-23。当前短期目标是应用与数据库都运行在同一台 MacBook Pro，**PostgreSQL 独立安装和管理，不纳入 Compose**。长期迁移路线见 [GCP 部署方案](gcp-deployment-plan.md)。本文和配置模板已准备，尚未在目标 MacBook Pro 安装数据库或完成容器部署。
 
 ## 1. 运行边界
