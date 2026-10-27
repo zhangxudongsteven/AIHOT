@@ -2,7 +2,7 @@
 
 DEV-01 在 2026-10-23 完成。使用 Node.js 24.22.1、PostgreSQL 17 和 npm workspaces；不依赖 Docker daemon。具体结果见 [DEV-01 / DEV-02 验证记录](reports/2026-10-23-dev01-dev02.md)。DEV-03/04 的配置版本、频道阅读、迁移切换及当前功能边界见[频道开发说明](multi-space-development.md)。
 
-当前开发版本为公开接口 4.1.0；最近一次复核见[评审与版本记录](reports/2026-10-23-review.md)。[已知问题](known-issues.md)尚未修复，包括迁移进程在 `DATABASE_POOL_MAX=1` 时等待自身持有的连接；开发迁移保留默认连接池或设置为至少 2。
+当前开发版本为公开接口 4.1.0；基线复核见[评审与版本记录](reports/2026-10-23-review.md)。2026-10-27 已本地修复 MS-001、MS-003、MS-005、MS-006，单连接迁移会复用保留连接；MS-002、MS-004、MS-007 仍待修复。状态和本地验证见[已知问题](known-issues.md)与[双频道说明](ai-security-channels.md)，不代表线上已升级。
 
 新机器先按[接续开发与部署说明](new-machine-setup.md)准备环境。当前短期部署目标见 [MacBook Pro 原生数据库与应用 Compose](macbook-deployment.md)；以下局域网连接记录属于原工作机，不会随 Git 自动配置到新机。只调页面时可让本机 Web 连接已运行的服务器 API；调后端时避免两套 worker 共用一个开发库。
 

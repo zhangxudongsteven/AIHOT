@@ -14,7 +14,8 @@
 
 - Node.js 24 直接运行 TypeScript，后端没有构建步骤。npm workspaces：`apps/*`、`packages/*`、`industry`、`site`、`modules/*`。
 - 本机运行和 Docker 见 `docs/deploy.md`。
-- 改完至少跑：
+- 日常开发不要求每次变更后都跑全套检查或全量回归；按改动影响范围做必要的定向验证即可，避免反复执行耗时检查。
+- 只有准备提交时，才需要对最终待提交版本统一运行以下全套检查：
   ```bash
   npm run typecheck
   DATABASE_URL=postgres://127.0.0.1:5432/<名字>_test npm test   # 名字必须以 _test 或 _ci 结尾；没有会自动建好并迁移，账号要能建库

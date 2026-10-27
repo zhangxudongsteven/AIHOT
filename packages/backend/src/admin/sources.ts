@@ -20,7 +20,7 @@ import { FetchError, type Candidate, type SourceRow } from "../sources/types.ts"
 import { fetchWebList } from "../sources/web-list.ts";
 import { fetchXSearch } from "../sources/x.ts";
 import { xHandle } from "../sources/account.ts";
-import { DEFAULT_SPACE_ID, resolveSpaceContext, type SpaceContext } from "../spaces/context.ts";
+import { configForContext, DEFAULT_SPACE_ID, resolveSpaceAdminContext, resolveSpaceContext, type SpaceContext } from "../spaces/context.ts";
 
 
 export interface SourceListFilters {
@@ -33,7 +33,7 @@ export interface SourceListFilters {
 }
 
 export async function listSources(f: SourceListFilters, context?: SpaceContext): Promise<BeforeJson<AdminSources>> {
-  const scope = await resolveSpaceContext(context?.spaceId ?? DEFAULT_SPACE_ID, context?.configVersion);
+  const scope = await resolveSpaceAdminContext(context?.spaceId ?? DEFAULT_SPACE_ID, context?.configVersion);
   const page = Math.max(1, f.page ?? 1);
   const q = f.q?.trim() ? `%${f.q.trim()}%` : null;
   const [rows, [totals]] = await Promise.all([
@@ -62,7 +62,7 @@ export async function listSources(f: SourceListFilters, context?: SpaceContext):
 }
 
 export async function sourceDetail(id: string, context?: SpaceContext): Promise<BeforeJson<AdminSourceDetail> | null> {
-  const scope = await resolveSpaceContext(context?.spaceId ?? DEFAULT_SPACE_ID, context?.configVersion);
+  const scope = await resolveSpaceAdminContext(context?.spaceId ?? DEFAULT_SPACE_ID, context?.configVersion);
   const [source] = await sql<BeforeJson<AdminSource>[]>`SELECT *, (tier = 'T1') AS first_party FROM sources WHERE id = ${id} AND space_id = ${scope.spaceId}`;
   if (!source) return null;
   const [runs, items, [stats], history, [republish]] = await Promise.all([
@@ -82,13 +82,14 @@ export async function sourceDetail(id: string, context?: SpaceContext): Promise<
 
 /** A stored source fetched now without storing anything; null when there is no such source. */
 export async function previewStoredSource(id: string, context?: SpaceContext): Promise<BeforeJson<AdminSourcePreview> | null> {
-  const scope = await resolveSpaceContext(context?.spaceId ?? DEFAULT_SPACE_ID, context?.configVersion);
+  const scope = await operationalSourceContext(context);
   const [source] = await sql<SourceRow[]>`SELECT * FROM sources WHERE id = ${id} AND space_id = ${scope.spaceId}`;
   return source ? previewSource(source, scope) : null;
 }
 
-export async function previewSource(draft: Pick<SourceRow, "id" | "kind" | "config"> & Partial<SourceRow>, context?: SpaceContext): Promise<BeforeJson<AdminSourcePreview>> {
-  const scope = await resolveSpaceContext(context?.spaceId ?? DEFAULT_SPACE_ID, context?.configVersion);
+export async function previewSource(draft: Pick<SourceRow, "id" | "kind" | "config"> & Partial<SourceRow> & { owner_entity_id?: string | null }, context?: SpaceContext): Promise<BeforeJson<AdminSourcePreview>> {
+  const scope = await operationalSourceContext(context);
+  assertSourceOwner(draft.owner_entity_id, scope);
   const source = { name: draft.id, enabled: true, cursor: null, tier: "T2", participation_mode: "editorial", ...draft, space_id: scope.spaceId, context: scope } as SourceRow;
   assertSupportedConfig(source.kind, source.config);
   const started = performance.now();
@@ -139,8 +140,9 @@ const EDITABLE = z
 const kindHooks = (kind: string) => serverModules().flatMap((m) => m.sourceKinds?.[kind] ?? []);
 
 export async function updateSource(id: string, input: { patch: unknown; version: string; reason?: string }, actor: string, context?: SpaceContext) {
-  const scope = await resolveSpaceContext(context?.spaceId ?? DEFAULT_SPACE_ID, context?.configVersion);
+  const scope = await resolveSpaceAdminContext(context?.spaceId ?? DEFAULT_SPACE_ID, context?.configVersion);
   const patch = EDITABLE.parse(input.patch);
+  assertSourceOwner(patch.owner_entity_id, scope);
   return sql.begin(async (tx) => {
     // Creation and address edits share the lock: checking then inserting must not race.
     if (patch.config) await tx`SELECT pg_advisory_xact_lock(hashtext(${`admin-source-identity:${scope.spaceId}`}))`;
@@ -199,7 +201,12 @@ export async function updateSource(id: string, input: { patch: unknown; version:
     // all (in the worker) so a revoked licence or an isolated source stops on every exit.
     const publisherChanged = patch.config && ["publisherRole", "publisherUrlPrefixes", "publisherRequiresDiscovery"].some(k => JSON.stringify((before.config as Record<string, unknown>)[k]) !== JSON.stringify(patch.config![k]));
     if (publisherChanged || keys.some((k) => PUBLICATION_FIELDS.includes(k) && JSON.stringify(before[k]) !== JSON.stringify(patch[k]))) {
-      await requestRepublish(tx, id, actor);
+      const [space] = await tx<{ enabled: boolean }[]>`SELECT enabled FROM spaces WHERE id = ${scope.spaceId}`;
+      if (space?.enabled) await requestRepublish(tx, id, actor);
+      else {
+        const [material] = await tx`SELECT 1 FROM articles WHERE source_id = ${id} LIMIT 1`;
+        if (material) throw new Conflict("停用频道已有文章；请启用频道后修改需要重发布的信源字段");
+      }
     }
     return after;
   });
@@ -228,11 +235,25 @@ const CreateSchema = z
     participation_mode: z.enum(["editorial", "hot_signal", "isolated"]).default("editorial"),
     interval_minutes: z.number().int().min(1).max(1440).default(30),
     first_party: z.boolean().default(false),
-    tags: z.array(z.string()).default([]),
+    enabled: z.boolean().default(true),
+    owner_entity_id: z.string().max(120).nullable().default(null),
+    signal_group_id: z.string().max(120).nullable().default(null),
+    tags: z.array(z.string().max(60)).max(30).default([]),
     site_fulltext: z.boolean().default(SOURCE_DEFAULTS.siteFulltext),
     syndicate_fulltext: z.boolean().default(false),
   })
   .strict();
+
+function assertSourceOwner(owner: string | null | undefined, context: SpaceContext) {
+  if (owner && !Object.hasOwn(configForContext(context).entities, owner)) throw new UnsupportedConfig(`频道 ${context.spaceId} 未配置机构：${owner}`);
+}
+
+async function operationalSourceContext(context?: SpaceContext) {
+  const spaceId = context?.spaceId ?? DEFAULT_SPACE_ID;
+  const [space] = await sql<{ enabled: boolean }[]>`SELECT enabled FROM spaces WHERE id = ${spaceId}`;
+  if (space && !space.enabled) throw new Conflict(`频道 ${spaceId} 已停用，不能预览或触发采集`);
+  return resolveSpaceContext(spaceId, context?.configVersion);
+}
 
 /** The address a source collects from, used to find duplicates before creating one. */
 export function sourceIdentity(kind: string, config: Record<string, unknown>): string | null {
@@ -258,8 +279,9 @@ export async function findDuplicateSource(kind: string, config: Record<string, u
 }
 
 export async function createSource(input: unknown, actor: string, context?: SpaceContext): Promise<BeforeJson<AdminSourceCreated>> {
-  const scope = await resolveSpaceContext(context?.spaceId ?? DEFAULT_SPACE_ID, context?.configVersion);
+  const scope = await resolveSpaceAdminContext(context?.spaceId ?? DEFAULT_SPACE_ID, context?.configVersion);
   const s = CreateSchema.parse(input);
+  assertSourceOwner(s.owner_entity_id, scope);
   s.first_party = s.tier === "T1";
   assertSupportedConfig(s.kind, s.config);
   return sql.begin(async (tx) => {
@@ -267,9 +289,9 @@ export async function createSource(input: unknown, actor: string, context?: Spac
     const dup = await findDuplicateSource(s.kind, s.config, undefined, tx, scope.spaceId);
     if (dup) return { created: false as const, duplicate: dup };
     const [row] = await tx<BeforeJson<AdminSource>[]>`
-    INSERT INTO sources (id, space_id, name, kind, config, tier, participation_mode, interval_minutes, first_party, tags, site_fulltext, syndicate_fulltext, next_fetch_at)
+    INSERT INTO sources (id, space_id, name, kind, config, tier, participation_mode, interval_minutes, first_party, tags, site_fulltext, syndicate_fulltext, enabled, owner_entity_id, signal_group_id, next_fetch_at)
     VALUES (${s.id}, ${scope.spaceId}, ${s.name}, ${s.kind}, ${tx.json(s.config as never)}, ${s.tier}, ${s.participation_mode}, ${s.interval_minutes}, ${s.first_party}, ${s.tags},
-            ${s.site_fulltext}, ${s.syndicate_fulltext}, now())
+            ${s.site_fulltext}, ${s.syndicate_fulltext}, ${s.enabled}, ${s.owner_entity_id}, ${s.signal_group_id}, now())
     ON CONFLICT (id) DO NOTHING RETURNING *`;
     if (!row) throw new Conflict(`信源 ID ${s.id} 已存在`);
     await audit(actor, "source.create", `source:${s.id}`, null, null, s, { db: tx });
@@ -277,8 +299,33 @@ export async function createSource(input: unknown, actor: string, context?: Spac
   });
 }
 
+/** A candidate file only creates sources. Existing IDs remain untouched, including operator edits. */
+export async function planSourceIntake(input: unknown, context?: SpaceContext) {
+  const scope = await resolveSpaceAdminContext(context?.spaceId ?? DEFAULT_SPACE_ID, context?.configVersion);
+  const { sources } = z.object({ $comment: z.string().optional(), sources: z.array(CreateSchema) }).strict().parse(input);
+  const ids = new Set<string>();
+  const identities = new Set<string>();
+  const rows = await sql<{ id: string; space_id: string; kind: string; config: Record<string, unknown> }[]>`SELECT id, space_id, kind, config FROM sources`;
+  const plan = sources.map(source => {
+    assertSupportedConfig(source.kind, source.config);
+    assertSourceOwner(source.owner_entity_id, scope);
+    if (ids.has(source.id)) throw new UnsupportedConfig(`候选清单中信源 ID 重复：${source.id}`);
+    ids.add(source.id);
+    const identity = sourceIdentity(source.kind, source.config);
+    const identityKey = JSON.stringify([source.kind, identity]);
+    if (identity && identities.has(identityKey)) throw new UnsupportedConfig(`候选清单中采集地址重复：${source.id}`);
+    if (identity) identities.add(identityKey);
+    const existing = rows.find(row => row.id === source.id);
+    if (existing && existing.space_id !== scope.spaceId) throw new Conflict(`信源 ID ${source.id} 已由其他频道使用`);
+    if (existing) return { id: source.id, action: "preserve" as const, source };
+    const duplicate = identity && rows.find(row => row.space_id === scope.spaceId && row.kind === source.kind && sourceIdentity(row.kind, row.config) === identity);
+    return duplicate ? { id: source.id, action: "duplicate" as const, duplicateId: duplicate.id, source } : { id: source.id, action: "create" as const, source };
+  });
+  return { context: scope, plan };
+}
+
 export async function fetchNow(id: string, actor: string, context?: SpaceContext) {
-  const scope = await resolveSpaceContext(context?.spaceId ?? DEFAULT_SPACE_ID, context?.configVersion);
+  const scope = await operationalSourceContext(context);
   const [s] = await sql<{ id: string; kind: string; config: Record<string, unknown> }[]>`SELECT id, kind, config FROM sources WHERE id = ${id} AND space_id = ${scope.spaceId}`;
   if (!s) return null;
   const own = kindHooks(s.kind).find((h) => h.fetchNow)?.fetchNow;

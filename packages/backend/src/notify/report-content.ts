@@ -11,8 +11,8 @@ const literal = (text: string) => text.replace(/[&<>*_~`[\]]/g, c => `&#${c.char
 export async function reportContent(id: number, context?: SpaceContext) {
   context = await notificationContext(context);
   if (!Number.isSafeInteger(id) || id < 1) return { status: "skipped", reason: "report not published" } as const;
-  const [row] = await sql<{ kind: ReportKind; key: string; window_end: Date }[]>`
-    SELECT kind, key, window_end FROM reports WHERE space_id = ${context.spaceId} AND id = ${id}`;
+  const [row] = await sql<{ kind: ReportKind; key: string; window_end: Date; created_at: Date }[]>`
+    SELECT kind, key, window_end, created_at FROM reports WHERE space_id = ${context.spaceId} AND id = ${id}`;
   if (!row || row.window_end > new Date()) return { status: "skipped", reason: "report not published" } as const;
   return withNotificationSpace(context, async () => {
     const report = await loadReport(row.kind, row.key);
@@ -30,6 +30,6 @@ export async function reportContent(id: number, context?: SpaceContext) {
         { tag: "button", text: { tag: "plain_text", content: `在 ${name} 阅读` }, type: "primary", behaviors: [{ type: "open_url", default_url: url }] },
       ] },
     };
-    return { status: "ready", contentAt: row.window_end, card } as const;
+    return { status: "ready", contentAt: row.created_at, card } as const;
   });
 }

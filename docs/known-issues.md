@@ -2,20 +2,21 @@
 
 登记日期：2026-10-23（Asia/Shanghai）。发现于本 fork DEV-01～DEV-05 变更，公开接口版本 4.1.0。
 
-本页记录本次 review 确认的 7 项问题，全部为 **Open / 待后续版本修复**，修复版本未定。本次仅登记问题，不修复代码。以下证据来自本地测试数据库或浏览器复现，不代表生产部署验证；既有回归通过也不表示这些问题已解决。
+本页保留 review 确认的 7 项问题。2026-10-27 已在本地修复 MS-001、MS-003、MS-005、MS-006，尚未发布；MS-002、MS-004、MS-007 仍 Open。以下原始复现与新增回归证据均来自隔离测试数据库或浏览器，不代表生产部署验证。最新范围见[双频道开发验证](reports/2026-10-27-ai-security-channels.md)。
 
 | 编号 | 优先级 | 问题 | 状态 | 修复版本 |
 | --- | --- | --- | --- | --- |
-| MS-001 | P1 | 停用频道阻断全局恢复 | Open / 待后续版本修复 | 未定 |
+| MS-001 | P1 | 停用频道阻断全局恢复 | 已本地修复 / 未发布 | 当前工作分支，未提交 |
 | MS-002 | P2 | 配置更新隐藏历史译文 | Open / 待后续版本修复 | 未定 |
-| MS-003 | P2 | 周报订阅窗口漏推 | Open / 待后续版本修复 | 未定 |
+| MS-003 | P2 | 周报订阅窗口漏推 | 已本地修复 / 未发布 | 当前工作分支，未提交 |
 | MS-004 | P2 | 讨论帖重匹配使用错误配置版本 | Open / 待后续版本修复 | 未定 |
-| MS-005 | P2 | 后台更正未传播到非默认频道报告 | Open / 待后续版本修复 | 未定 |
-| MS-006 | P2 | 单连接池导致迁移永久等待 | Open / 待后续版本修复 | 未定 |
+| MS-005 | P2 | 后台更正未传播到非默认频道报告 | 已本地修复 / 未发布 | 当前工作分支，未提交 |
+| MS-006 | P2 | 单连接池导致迁移永久等待 | 已本地修复 / 未发布 | 当前工作分支，未提交 |
 | MS-007 | P2 | 跨频道后退、前进丢失历史快照 | Open / 待后续版本修复 | 未定 |
 
 ## MS-001：停用频道阻断全局恢复
 
+- **本地修复（2026-10-27）：** 回执核对仍提交；重置文章为可恢复状态后，停用频道不重新入队。共享锁保护启停与入队判断；重新启用可由正常 sweep 接续。`processing-recovery.test.ts` 覆盖停用频道与正常频道同批核对、无停用任务及重新启用恢复。
 - **位置：** [jobs/content.ts](../packages/backend/src/jobs/content.ts) 的 `resumeAfterRelease()`（登记时第 320～324 行）；调用链见 [operations/recover.ts](../packages/backend/src/operations/recover.ts) 的 `release()`、`autoReleaseUnknownReceipts()` 和 `recoverStaleWork()`。
 - **触发与复现：** 频道内文章因 unknown 回执进入失败状态，随后停用该频道，再执行自动释放。`resumeAfterRelease()` 调用 `queueProcessing()` 时，频道解析抛出 `Space is disabled`，整个回执释放事务回滚。本地复现中，该回执及排在其后的无关回执均保持 `unknown`。
 - **影响：** 单个停用频道的回执使本轮全局恢复中断，后续回执、任务、归组及投递恢复均不能继续；下轮仍会遇到同一回执。
@@ -32,6 +33,7 @@
 
 ## MS-003：周报订阅窗口漏推
 
+- **本地修复（2026-10-27）：** 用报告 `created_at` 判断首次发布，保留 `window_end` 用于内容窗口和发布时间边界。`deliveries.test.ts` 覆盖窗口先结束但新刊可投递、重试去重，以及重编旧刊不补推给新订阅者。
 - **位置：** [notify/report-content.ts](../packages/backend/src/notify/report-content.ts) 将 `row.window_end` 作为 `contentAt`（登记时第 33 行）；[notify/deliver.ts](../packages/backend/src/notify/deliver.ts) 将其与目标的 `enabled_at` 比较（第 95 行）。
 - **触发与复现：** 默认周报统计窗口在周日 08:00 结束、周一 10:00 出刊；周一早上启用报告订阅时，新刊的窗口结束时间已早于目标启用时间。本地复现使用“窗口昨天结束、报告现在生成、目标一小时前启用”，`pushReport()` 返回 `skipped / no new target`，没有生成 delivery。
 - **影响：** 目标在出刊前已订阅，仍收不到新生成的周报；统计窗口结束时间被误用为通知的新旧内容边界。
@@ -48,6 +50,7 @@
 
 ## MS-005：后台更正未传播到非默认频道报告
 
+- **本地修复（2026-10-27）：** 从文章归属解析配置，按该频道分类词表校验，并把同一上下文传给报告更正。`space-reports.test.ts` 通过真实 `overrideFields` 调用验证动态安全分类、报告修订、其他频道不变及错误分类不写入。
 - **位置：** [reports/correct.ts](../packages/backend/src/reports/correct.ts) 的 `correctReportClassification()`（登记时第 15～21 行）；生产调用位于 [admin/content.ts](../packages/backend/src/admin/content.ts) 第 318 行。
 - **触发与复现：** 后台更改非默认频道文章分类时，调用未传入频道上下文，helper 因而按 `default` 查询。本地通过 `overrideFields()` 将文章从 `ai-models` 改为 `paper` 后，publication 分类已变为 `paper`，日报仍留在“模型发布/更新”栏目、revision 仍为 1；显式传入正确上下文后，才移动到“论文研究”并生成 revision 2。
 - **影响：** 文章与其已发布报告分类不一致，正常后台更正不能完成非默认频道报告的同步修订。
@@ -56,6 +59,7 @@
 
 ## MS-006：单连接池导致迁移永久等待
 
+- **本地修复（2026-10-27）：** 默认频道初始化复用迁移已经保留的连接。`migrations.test.ts` 以 `DATABASE_POOL_MAX=1` 子进程验证重新初始化与重复迁移均结束，并读回活动配置。未修改历史迁移。
 - **位置：** [scripts/migrate.ts](../scripts/migrate.ts) 的 `runMigrations()`（登记时第 91～94 行）；默认频道初始化见 [spaces/context.ts](../packages/backend/src/spaces/context.ts) 的 `ensureDefaultSpace()`。
 - **触发与复现：** 设置 `DATABASE_POOL_MAX=1` 执行迁移。脚本仍持有 `sql.reserve()` 取得的唯一连接，却把连接池 `sql` 传给 `ensureDefaultSpace()`；初始化等待空闲连接，保留连接又要等初始化返回才释放。本地对无待迁移的数据库执行也未退出，三秒超时后以 SIGTERM 终止；同一数据库使用两连接时正常返回 `database is up to date`。
 - **影响：** 允许的单连接池配置下，迁移和重复迁移都会卡住，不能完成应用启动前的数据库准备。

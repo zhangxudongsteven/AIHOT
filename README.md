@@ -12,7 +12,8 @@
 
 - DEV-01～DEV-05 已接入频道配置快照、采集与处理上下文、网站切换及公开出口、独立报告、通知订阅和请求配额。
 - 本轮交接准备通过后端 1033/1033、Web 66/66、类型检查和构建，范围与首轮失败记录见[交接验证](docs/reports/2026-10-23-new-machine-handoff.md)；新机器仍需重新验证。此前结果见[评审记录](docs/reports/2026-10-23-review.md)和 [LAN 验证记录](docs/reports/2026-10-23-lan-deployment.md)。
-- 评审确认的 [7 项问题](docs/known-issues.md)仍待后续版本修复；完整测试通过不表示这些问题已经关闭。
+- 评审登记的 [7 项问题](docs/known-issues.md)中，MS-001、MS-003、MS-005、MS-006 已于 2026-10-27 本地修复，尚未发布；其余三项待修。
+- [AI 与网络安全双频道准备](docs/ai-security-channels.md)增加按频道管理信源、独立筛选评测及两套候选配置；来源保持禁用，安全门槛未校准，线上环境未改动。本地验证见[开发记录](docs/reports/2026-10-27-ai-security-channels.md)。
 - 已通过 TokenHub 完成一次真实 DeepSeek 请求、回执复用及配额验证，见[联调记录](docs/reports/2026-10-23-deepseek-integration.md)；完整内容流水线和飞书推送尚未验收，常驻外发保持关闭。
 - 短期在 MacBook Pro 原生运行 PostgreSQL 17，Compose 仅管理应用；[部署模板](docs/macbook-deployment.md)已准备，目标机器尚未部署。正式安全证据、资产影响与处置流程、业务验收及 GKE 部署仍待后续推进。
 

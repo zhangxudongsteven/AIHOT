@@ -7,6 +7,9 @@ import path from "node:path";
 import { after, test } from "node:test";
 import postgres from "postgres";
 import { runMigrations } from "../scripts/migrate.ts";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { REPO_ROOT } from "@aihot/backend/config";
 
 const db = postgres(process.env.DATABASE_URL!, { max: 1, onnotice: () => {} });
 const other = postgres(process.env.DATABASE_URL!, { max: 1, onnotice: () => {} });
@@ -23,6 +26,17 @@ function fixture(files: Record<string, string>) {
   }
   return root;
 }
+
+test("default-channel bootstrap and repeated migration finish with a single connection", async () => {
+  await db`UPDATE spaces SET active_config_version=NULL WHERE id='default'`;
+  for (let i=0; i<2; i++) {
+    const { stdout } = await promisify(execFile)(process.execPath, [path.join(REPO_ROOT, 'scripts/migrate.ts')], {
+      cwd: REPO_ROOT, env: { ...process.env, DATABASE_POOL_MAX: '1' }, timeout: 15_000,
+    });
+    assert.match(stdout, /database is up to date/);
+    assert.ok((await db`SELECT active_config_version FROM spaces WHERE id='default'`)[0]!.active_config_version);
+  }
+});
 
 test("unsafe later files and duplicate module names fail before any change", async () => {
   await assert.rejects(runMigrations(db, fixture({

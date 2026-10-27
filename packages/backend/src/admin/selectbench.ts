@@ -31,12 +31,18 @@ const invalid = (message: string) => Object.assign(new Error(message), { statusC
 /** A report as scripts/eval-selection.ts writes it: { meta, models }. */
 export async function importSelectBenchRun(report: unknown, label: string, actor: string) {
   const r = report as { meta?: Record<string, unknown>; models?: Record<string, ModelReport> };
+  if (r.meta?.spaceId !== undefined && r.meta.spaceId !== "default") {
+    throw invalid("SelectBench only accepts default-channel reports; keep other channel evaluations as standalone reports");
+  }
   const models = r.models ?? {};
   const names = Object.keys(models).filter((m) => models[m]?.summary);
   if (!names.length) throw invalid("report has no model summaries");
   // Reject invalid evidence before writing a run; the same case may appear once per model.
   const goldByCase = new Map<string, string>();
   for (const m of names) {
+    if (models[m]!.summary.spaceId !== undefined && models[m]!.summary.spaceId !== "default") {
+      throw invalid(`${m}: SelectBench only accepts default-channel reports`);
+    }
     const cases = models[m]!.cases;
     if (cases === undefined) continue;
     if (!Array.isArray(cases)) throw invalid(`${m}: cases must be an array`);

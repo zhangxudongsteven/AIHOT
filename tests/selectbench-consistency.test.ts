@@ -40,6 +40,8 @@ test("every invalid report returns 400 before any report writes", async (t) => {
     "blank caseId": { models: { first: { summary: {}, cases: [{ ...item, caseId: " " }] } } },
     "duplicate caseId": { models: { first: { summary: {}, cases: [item, item] } } },
     "invalid gold": { models: { first: { summary: {}, cases: [{ ...item, gold: "SELECT" }] } } },
+    "another channel": { meta: { spaceId: 'security', configVersion: 'candidate' }, models: { first: { summary: {}, cases: [item] } } },
+    "another channel in summary": { models: { first: { summary: { spaceId: 'security' }, cases: [item] } } },
   };
   for (const [name, report] of Object.entries(reports)) {
     await t.test(name, async () => {

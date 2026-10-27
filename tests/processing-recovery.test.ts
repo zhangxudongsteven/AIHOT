@@ -10,7 +10,8 @@ import { upsertMaterial } from "@aihot/backend/content/materials";
 import { rerun } from "@aihot/backend/admin/content";
 import { processArticle, queueProcessing, registerContentJobs, sweepUnprocessed } from "@aihot/backend/jobs/content";
 import { enqueue, getBoss, QUEUES, stopBoss } from "@aihot/backend/jobs/queue";
-import { recoverStaleWork, releaseReceipt } from "@aihot/backend/operations/recover";
+import { autoReleaseUnknownReceipts, recoverStaleWork, releaseReceipt } from "@aihot/backend/operations/recover";
+import { defaultSpaceConfig, resolveSpaceContext, storeSpaceConfig } from "@aihot/backend/spaces/context";
 import { ReceiptUnknownError } from "@aihot/backend/providers/receipts";
 
 const T = tag();
@@ -110,6 +111,38 @@ test("an authorized recovery preserves unknown billing instead of claiming no ch
   assert.doesNotMatch(record!.error, /供应商未计费/);
   const [logged] = await sql`SELECT after FROM audit_log WHERE action='receipt.release' AND subject=${`receipt:${receipt!.id}`}`;
   assert.equal(logged!.after.billed, null);
+});
+
+test("a suspended channel's unknown receipt is reconciled without blocking another channel or scheduling work", async () => {
+  const space = `recovery-space-${tag()}`;
+  await sql`INSERT INTO spaces (id, slug) VALUES (${space}, ${space})`;
+  const context = await storeSpaceConfig(space, defaultSpaceConfig());
+  await sql`UPDATE spaces SET active_config_version=${context.configVersion} WHERE id=${space}`;
+  const source = `source-${space}`;
+  await sql`INSERT INTO sources(id,space_id,name,kind,tier) VALUES(${source},${space},'Suspended recovery','rss','T1')`;
+  const { articleId: suspended } = await upsertMaterial({ sourceId: source, url: `https://example.org/${space}`,
+    title: '待核验公告', bodyText: '公开材料', bodyStatus: 'ok', via: 'fetch' }, sql, context);
+  const active = await article('active-after-suspended');
+  const defaultContext = await resolveSpaceContext('default');
+  for (const [id, spaceId, version] of [[suspended, space, context.configVersion], [active, 'default', defaultContext.configVersion]] as const) {
+    const [receipt] = await sql<{ id: number }[]>`INSERT INTO receipts(logical_key,service,purpose,subject,status,space_id,config_version,updated_at)
+      VALUES(${`suspended-recovery-${id}`},'deepseek','score_article',${`article:${id}@1`},'unknown',${spaceId},${version},now()-interval '31 minutes') RETURNING id`;
+    await sql`UPDATE articles SET processing_state='failed',processing_config_version=${version},
+      processing_error=${`receipt ${receipt!.id} outcome unknown`},created_at=now()-interval '5 minutes' WHERE id=${id}`;
+  }
+  await sql`UPDATE spaces SET enabled=false WHERE id=${space}`;
+  const result = await autoReleaseUnknownReceipts();
+  assert.ok(result.released >= 2);
+  const rows = await sql`SELECT status FROM receipts WHERE logical_key IN (${`suspended-recovery-${suspended}`},${`suspended-recovery-${active}`})`;
+  assert.ok(rows.every(r => r.status === 'failed'), 'both receipt reconciliations commit');
+  assert.equal((await sql`SELECT processing_state FROM articles WHERE id=${suspended}`)[0]!.processing_state, 'new');
+  assert.equal((await sql`SELECT 1 FROM pgboss.job WHERE data->>'articleId'=${suspended}`).length, 0);
+  assert.equal((await sql`SELECT 1 FROM pgboss.job WHERE data->>'articleId'=${active}`).length, 1);
+  await sql`UPDATE spaces SET enabled=true WHERE id=${space}`;
+  await sweepUnprocessed();
+  assert.equal((await sql`SELECT 1 FROM pgboss.job WHERE data->>'articleId'=${suspended}`).length, 1, 'reenabling permits the ordinary sweep to resume');
+  await sql`UPDATE articles SET processing_state='skipped' WHERE id IN (${suspended},${active})`;
+  await sql`DELETE FROM pgboss.job WHERE data->>'articleId'=${suspended}`;
 });
 
 test("a manual re-evaluation survives extraction, a lost job, and receipt release with the same paid identity", async () => {

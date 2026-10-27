@@ -315,13 +315,16 @@ export async function resumeAfterRelease(receipt: { id: number; purpose: string;
   const subject = ARTICLE_STEPS.has(receipt.purpose) ? /^article:([^@:#]+)@([1-9]\d*)$/.exec(receipt.subject ?? "") : null;
   if (!subject || !Number.isSafeInteger(Number(subject[2]))) return false;
   const article = subject[1]!;
+  // Reconciliation still commits for a suspended channel. Hold its state until the enqueue decision
+  // so disabling it cannot race a release into rolling back unrelated recovery work.
+  const [space] = await db<{ enabled: boolean }[]>`SELECT enabled FROM spaces WHERE id = ${receipt.space_id ?? DEFAULT_SPACE_ID} FOR SHARE`;
   // A release belongs to the exact failure that stopped this revision. A newer evaluation may have
   // failed for a different receipt (or reason); releasing history must not clear or wake that work.
   const [a] = await db`UPDATE articles SET processing_state = 'new', processing_attempts = 0, processing_retry_at = NULL, processing_error = NULL
                         WHERE id = ${article} AND revision = ${Number(subject[2])} AND space_id = ${receipt.space_id ?? DEFAULT_SPACE_ID}
                           AND (${receipt.config_version ?? null}::text IS NULL OR processing_config_version = ${receipt.config_version ?? null})
                           AND processing_state = 'failed' AND processing_error = ${`receipt ${receipt.id} outcome unknown`} RETURNING id`;
-  return !!a && !!(await queueProcessing(article, { step: "analyze", db }));
+  return !!a && !!space?.enabled && !!(await queueProcessing(article, { step: "analyze", db }));
 }
 
 /** How the runs page groups failures: the message with ids and numbers masked. */
