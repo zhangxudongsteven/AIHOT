@@ -1,0 +1,51 @@
+{
+  "date": "2026-10-28",
+  "evidenceScope": "裁减后的公开验证摘要；不含原始运行快照、回执、预算用量或审计数据，完整原件仅在本机保留。",
+  "historicalScope": "两个 RAG 来源启用和首次导入的汇总；不表示论文已经完成正式分析或长期运行验收。",
+  "summary": {
+    "categories": [
+      "cs.CL",
+      "cs.AI"
+    ],
+    "enabledSourceCount": 2,
+    "initialIntervalMinutes": 180,
+    "uniqueSeedPaperCount": 5,
+    "discoveryRelationCount": 6,
+    "sameVersionCrossCategoryDuplicatesMerged": 1,
+    "formalAnalysisCompletedAtSnapshot": false,
+    "aiContentPushDisabled": true,
+    "aiDeliveryCount": 0
+  },
+  "publicSeedPapers": [
+    {
+      "title": "RouteDRAG: Learning to Route and Control Agentic Execution for Multimodal Document RAG",
+      "url": "https://arxiv.org/abs/2610.36444v1",
+      "publishedAt": "2026-10-27T00:45:49.000Z"
+    },
+    {
+      "title": "Do We Need an LLM to Know Why Sources Conflict? Decision Models for Knowledge-Conflict Typing in RAG",
+      "url": "https://arxiv.org/abs/2610.36915v1",
+      "publishedAt": "2026-10-27T09:43:21.000Z"
+    },
+    {
+      "title": "SpectRAG: Weighted Chunk Graphs for Token-Budgeted Context Selection in Multi-Hop Retrieval-Augmented Generation",
+      "url": "https://arxiv.org/abs/2610.36991v1",
+      "publishedAt": "2026-10-27T10:38:29.000Z"
+    },
+    {
+      "title": "Coverage Under Contradiction: A Benchmark for Negation-Aware Retrieval",
+      "url": "https://arxiv.org/abs/2610.37162v1",
+      "publishedAt": "2026-10-27T12:54:48.000Z"
+    },
+    {
+      "title": "Grounding LLM Agents in Business Processes: Process-Aware Knowledge Graphs for Reliable Multi-Step Service Invocation",
+      "url": "https://arxiv.org/abs/2610.37242v1",
+      "publishedAt": "2026-10-27T13:45:29.000Z"
+    }
+  ],
+  "limitations": [
+    "材料为作者摘要网页，不含论文全文或实验核验。",
+    "同版本跨分类去重已观察；不同 v1/v2 版本的专用归一化尚未实现。",
+    "正式评分及写作异步执行，仍受既有预算控制；不能把首次导入当作处理完成。"
+  ]
+}

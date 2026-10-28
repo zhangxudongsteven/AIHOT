@@ -2,7 +2,7 @@
 
 这是基于 [KKKKhazix/AIHOT](https://github.com/KKKKhazix/AIHOT) 独立维护的开发分支，当前仓库为 [zhangxudongsteven/AIHOT](https://github.com/zhangxudongsteven/AIHOT)。后续需求、修复、版本和更新日志由本项目维护，不再以向原项目贡献为目标。
 
-项目提供统一网站，在不同业务频道中独立采集资料、筛选写作、归组事件、生成日报/周报/月报，并通过网站、RSS、公开 API、Agent Markdown 和 MCP 提供内容。网络安全业务先推进，出海政策与 3C 硬件后续接入；正式站名、品牌、信源与业务规则仍待确定，页面上的 `MyHOT` 是占位配置。
+项目提供统一网站，在不同业务频道中独立采集资料、筛选写作、归组事件、生成日报/周报/月报，并通过网站、RSS、公开 API、Agent Markdown 和 MCP 提供内容。当前推进 AI 与网络安全，出海政策与 3C 硬件后续接入；正式站名、品牌及完整信源与业务规则仍待确定，页面上的 `MyHOT` 是占位配置。
 
 [English](README.en.md) · [更新日志](CHANGELOG.md) · [维护约定](docs/fork-maintenance.md) · [已知问题](docs/known-issues.md)
 
@@ -10,14 +10,14 @@
 
 当前项目版本为 **4.2.0**，公开协议版本保持 **4.1.0**；版本标签 `v4.2.0` 对应源码归档，不代表线上已升级。
 
-首个自维护开发基线为 **4.1.0**（提交 `b0ea3ed`），上游代码基线为 `b3998dc6fc138eb9659f33f55eb38c1c716f0d57`。这些版本记录只代表本项目，不代表上游发行版。
+首个自维护开发基线为 **4.1.0**（提交 `b0ea3ed`），分叉时的上游基线为 `b3998dc6fc138eb9659f33f55eb38c1c716f0d57`，后续修复按项引入。这些版本记录只代表本项目，不代表上游发行版。
 
 - DEV-01～DEV-05 已接入频道配置快照、采集与处理上下文、网站切换及公开出口、独立报告、通知订阅和请求配额。
-- 4.2.0 本地后端 1046/1046、Web 66/66、类型检查、构建及 smoke/MCP 通过，见[本轮验证](docs/reports/2026-10-27-ai-security-channels.md)。此前交接通过后端 1033/1033、Web 66/66、类型检查和构建，范围与首轮失败记录见[交接验证](docs/reports/2026-10-23-new-machine-handoff.md)；新机器仍需重新验证。此前结果见[评审记录](docs/reports/2026-10-23-review.md)和 [LAN 验证记录](docs/reports/2026-10-23-lan-deployment.md)。
+- 截至 2026-10-28，`main` 已合并后台频道管理、来源日期精度与安全公告采集，以及[六个上游日期和登录页修复](docs/reports/2026-10-28-upstream-six-fixes.md)。六修复基线在 Node 24 下完成后端 1095/1095、Web 99/99、类型检查、构建及 smoke/MCP；结果对应报告中的固定版本，不代表后续改动自动通过。此前 4.2.0 验证见[开发记录](docs/reports/2026-10-27-ai-security-channels.md)。
 - 评审登记的 [7 项问题](docs/known-issues.md)中，MS-001、MS-003、MS-005、MS-006 已修复并归入 4.2.0（实现提交 `e341acb`）；其余三项待修。
-- [AI 与网络安全双频道准备](docs/ai-security-channels.md)增加按频道管理信源、独立筛选评测及两套候选配置；来源保持禁用，安全门槛未校准，线上环境未改动。本地验证见[开发记录](docs/reports/2026-10-27-ai-security-channels.md)。
-- 已通过 TokenHub 完成一次真实 DeepSeek 请求、回执复用及配额验证，见[联调记录](docs/reports/2026-10-23-deepseek-integration.md)；完整内容流水线和飞书推送尚未验收，常驻外发保持关闭。
-- 短期在 MacBook Pro 原生运行 PostgreSQL 17，Compose 仅管理应用；[部署模板](docs/macbook-deployment.md)已准备，目标机器尚未部署。正式安全证据、资产影响与处置流程、业务验收及 GKE 部署仍待后续推进。
+- [双频道候选配置](docs/ai-security-channels.md)导出仍默认禁用；10 月 28 日已按使用者授权在 `myhot-lan` 分批启用部分 AI 新闻、arXiv 论文摘要与 Node.js / Spring 安全来源，见[运营记录汇总](docs/reports/2026-10-28-operations-summary.md)。这些是指定运行环境中的操作，拉取源码不会复现来源启用或数据库状态；安全门槛仍未校准。
+- 真实采集、正文与日期读取、模型预筛和双评分已有小样本验证；论文试运行仍须观察分页、跨版本重复、异步处理和产出质量。AI 内容推送订阅在这些操作中保持关闭，不能据此推断其他频道的发送状态；开发环境继续关闭真实采集、模型和外发，staging 保持隔离且强制关闭外发。
+- 已有 [LAN 运行环境](docs/lan-deployment.md)与[隔离 staging](docs/reports/2026-10-28-source-dates-staging.md)验收记录。MacBook Pro 原生 PostgreSQL 的[部署模板](docs/macbook-deployment.md)是另一种部署方式，其目标机器验收仍需单独完成。正式安全证据、资产影响与处置流程、持续运营验收及 GKE 部署仍待推进。
 
 ## 本地开发
 
@@ -54,6 +54,7 @@ node scripts/smoke.ts --base http://127.0.0.1:3000
 | [开发计划](docs/development-plan.md) | 业务范围、开发阶段与尚缺输入 |
 | [新机器开发与部署](docs/new-machine-setup.md) | 获取 main 基线、隔离开发/运行数据、恢复私有配置与验收 |
 | [已知问题](docs/known-issues.md) | MS-001～MS-007 的复现、影响和修复验收 |
+| [10 月 28 日运营汇总](docs/reports/2026-10-28-operations-summary.md) | AI、安全与论文来源操作、公开验证摘要及未验收事项 |
 | [频道说明](docs/multi-space-development.md) | 配置、任务、公开出口、报告、推送及配额 |
 | [架构](docs/architecture.md) | Web/API/worker、模块、数据库迁移与公开读取层 |
 | [信源](docs/sources.md) | 采集类型、正文许可、日期与外部推送 |

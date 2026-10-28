@@ -1,0 +1,718 @@
+{
+  "date": "2026-10-28",
+  "evidenceScope": "裁减后的公开验证摘要；不含原始运行快照、回执、预算用量或审计数据，完整原件仅在本机保留。",
+  "method": {
+    "steps": {
+      "prefilter": "default",
+      "score": "default"
+    },
+    "thresholds": {
+      "T1": 60,
+      "T2": 76,
+      "T1_5": 65
+    },
+    "method": "one-shot listing/body + production prefilter and two scores; no article ingestion, no publication, no queue, no pushes; receipts and budgets retained"
+  },
+  "model": "deepseek/deepseek-flash",
+  "summary": {
+    "sourceCount": 8,
+    "sampleCount": 23,
+    "selected": 9,
+    "notSelected": 14,
+    "prefilterRejected": 0,
+    "evaluationErrors": 0
+  },
+  "sources": [
+    {
+      "name": "Anthropic News",
+      "listed": 24,
+      "deduped": 24,
+      "withinBackfillWindow": 18,
+      "sampled": 3,
+      "months": 1
+    },
+    {
+      "name": "DeepSeek 官方更新日志",
+      "listed": 24,
+      "deduped": 24,
+      "withinBackfillWindow": 2,
+      "sampled": 2,
+      "months": 1
+    },
+    {
+      "name": "Google DeepMind",
+      "listed": 100,
+      "deduped": 100,
+      "withinBackfillWindow": 10,
+      "sampled": 3,
+      "months": 1
+    },
+    {
+      "name": "上海人工智能实验室",
+      "listed": 7,
+      "deduped": 7,
+      "withinBackfillWindow": 6,
+      "sampled": 3,
+      "months": 1
+    },
+    {
+      "name": "量子位",
+      "listed": 10,
+      "deduped": 10,
+      "withinBackfillWindow": 10,
+      "sampled": 3,
+      "months": 1
+    },
+    {
+      "name": "MIT News · AI",
+      "listed": 50,
+      "deduped": 50,
+      "withinBackfillWindow": 32,
+      "sampled": 3,
+      "months": 1
+    },
+    {
+      "name": "极客公园",
+      "listed": 30,
+      "deduped": 30,
+      "withinBackfillWindow": 30,
+      "sampled": 3,
+      "months": 1
+    },
+    {
+      "name": "The Decoder",
+      "listed": 10,
+      "deduped": 10,
+      "withinBackfillWindow": 10,
+      "sampled": 3,
+      "months": 1
+    }
+  ],
+  "items": [
+    {
+      "sourceName": "DeepSeek 官方更新日志",
+      "url": "https://api-docs.deepseek.com/zh-cn/updates/#开放自研搜索-api",
+      "title": "开放自研搜索 API",
+      "publishedAt": "2026-10-16T16:00:00.000Z",
+      "publicationTime": "2026-10-17",
+      "tier": "T1",
+      "threshold": 60,
+      "bodyStatus": "ok",
+      "bodyChars": 217,
+      "bodyVia": "listing",
+      "bodyDate": null,
+      "collectionBodyChars": 217,
+      "score": 65,
+      "selected": true,
+      "error": null,
+      "prefilter": {
+        "label": "PASS",
+        "reason": "DeepSeek自研AI搜索API及LLM相关能力"
+      },
+      "scores": {
+        "values": [
+          58,
+          72
+        ]
+      }
+    },
+    {
+      "sourceName": "Anthropic News",
+      "url": "https://www.anthropic.com/research/early-progress-drug-development",
+      "title": "Early progress on accelerating drug development with Claude",
+      "publishedAt": "2026-10-27T00:00:00.000Z",
+      "publicationTime": "2026-10-27",
+      "tier": "T1",
+      "threshold": 60,
+      "bodyStatus": "ok",
+      "bodyChars": 11588,
+      "bodyVia": "readability",
+      "bodyDate": "2026-10-27T00:00:00.000Z",
+      "collectionBodyChars": 11588,
+      "score": 62,
+      "selected": true,
+      "error": null,
+      "prefilter": {
+        "label": "PASS",
+        "reason": "Claude用于药物研发多环节，含模型应用与评测"
+      },
+      "scores": {
+        "values": [
+          62,
+          62
+        ]
+      }
+    },
+    {
+      "sourceName": "DeepSeek 官方更新日志",
+      "url": "https://api-docs.deepseek.com/zh-cn/updates/#deepseek-v41-flash-1017-更新",
+      "title": "DeepSeek-V4.1-Flash-1017 更新",
+      "publishedAt": "2026-10-16T16:00:00.000Z",
+      "publicationTime": "2026-10-17",
+      "tier": "T1",
+      "threshold": 60,
+      "bodyStatus": "ok",
+      "bodyChars": 761,
+      "bodyVia": "listing",
+      "bodyDate": null,
+      "collectionBodyChars": 761,
+      "score": 71,
+      "selected": true,
+      "error": null,
+      "prefilter": {
+        "label": "PASS",
+        "reason": "DeepSeek模型更新及基准评测"
+      },
+      "scores": {
+        "values": [
+          71,
+          72
+        ]
+      }
+    },
+    {
+      "sourceName": "Anthropic News",
+      "url": "https://www.anthropic.com/news/expanding-partnership-gsa",
+      "title": "Expanding our partnership with GSA to bring Claude to all levels of government",
+      "publishedAt": "2026-10-27T00:00:00.000Z",
+      "publicationTime": "2026-10-27",
+      "tier": "T1",
+      "threshold": 60,
+      "bodyStatus": "ok",
+      "bodyChars": 3967,
+      "bodyVia": "readability",
+      "bodyDate": "2026-10-27T00:00:00.000Z",
+      "collectionBodyChars": 3967,
+      "score": 58,
+      "selected": false,
+      "error": null,
+      "prefilter": {
+        "label": "PASS",
+        "reason": "Anthropic与GSA合作推广Claude政府应用"
+      },
+      "scores": {
+        "values": [
+          58,
+          58
+        ]
+      }
+    },
+    {
+      "sourceName": "Anthropic News",
+      "url": "https://www.anthropic.com/news/s1-sec",
+      "title": "Anthropic files S-1 with the SEC for proposed initial public offering",
+      "publishedAt": "2026-10-26T00:00:00.000Z",
+      "publicationTime": "2026-10-26",
+      "tier": "T1",
+      "threshold": 60,
+      "bodyStatus": "ok",
+      "bodyChars": 1467,
+      "bodyVia": "readability",
+      "bodyDate": "2026-10-26T00:00:00.000Z",
+      "collectionBodyChars": 1467,
+      "score": 82,
+      "selected": true,
+      "error": null,
+      "prefilter": {
+        "label": "PASS",
+        "reason": "Anthropic为AI公司，其IPO属AI业务经营活动"
+      },
+      "scores": {
+        "values": [
+          82,
+          82
+        ]
+      }
+    },
+    {
+      "sourceName": "上海人工智能实验室",
+      "url": "https://www.shlab.org.cn/news/5444310",
+      "title": "办大赛、聚人才、促合作，上海AI实验室携手产学研协同创新，推动“人工智能+”行动落地见效",
+      "publishedAt": "2026-10-26T16:00:00.000Z",
+      "publicationTime": "2026-10-27",
+      "tier": "T1",
+      "threshold": 60,
+      "bodyStatus": "ok",
+      "bodyChars": 2847,
+      "bodyVia": "readability",
+      "bodyDate": null,
+      "collectionBodyChars": 2847,
+      "score": 25,
+      "selected": false,
+      "error": null,
+      "prefilter": {
+        "label": "PASS",
+        "reason": "上海AI实验室办AI赛事与平台，含AI智能体、大模型等实质内容"
+      },
+      "scores": {
+        "values": [
+          22,
+          28
+        ]
+      }
+    },
+    {
+      "sourceName": "Google DeepMind",
+      "url": "https://deepmind.google/blog/genie-4-a-new-generation-of-world-simulation/",
+      "title": "Genie 4: A new generation of world simulation",
+      "publishedAt": "2026-10-27T16:01:38.000Z",
+      "publicationTime": "2026-10-27T16:01:38.000Z",
+      "tier": "T1",
+      "threshold": 60,
+      "bodyStatus": "ok",
+      "bodyChars": 11998,
+      "bodyVia": "readability",
+      "bodyDate": "2026-10-27T16:13:00.000Z",
+      "collectionBodyChars": 11998,
+      "score": 81,
+      "selected": true,
+      "error": null,
+      "prefilter": {
+        "label": "PASS",
+        "reason": "DeepMind发布Genie 4世界模型，属AI模型发布"
+      },
+      "scores": {
+        "values": [
+          79,
+          84
+        ]
+      }
+    },
+    {
+      "sourceName": "上海人工智能实验室",
+      "url": "https://www.shlab.org.cn/news/5444309",
+      "title": "递归自我改进（RSI）新进展！通专融合智能体书生-A1.5上线，验证真实科学场景驱动模型自进化新路径",
+      "publishedAt": "2026-10-25T16:00:00.000Z",
+      "publicationTime": "2026-10-26",
+      "tier": "T1",
+      "threshold": 60,
+      "bodyStatus": "ok",
+      "bodyChars": 3082,
+      "bodyVia": "readability",
+      "bodyDate": null,
+      "collectionBodyChars": 3082,
+      "score": 71,
+      "selected": true,
+      "error": null,
+      "prefilter": {
+        "label": "PASS",
+        "reason": "发布通专融合智能体Sage-A1.5及RSI技术进展"
+      },
+      "scores": {
+        "values": [
+          72,
+          71
+        ]
+      }
+    },
+    {
+      "sourceName": "上海人工智能实验室",
+      "url": "https://www.shlab.org.cn/news/5444308",
+      "title": "新纪录！指甲盖截面大小3D打印工程钛合金可承18吨拉力，自进化合金设计专家模型书生·衍金加速材料领域突破",
+      "publishedAt": "2026-10-20T16:00:00.000Z",
+      "publicationTime": "2026-10-21",
+      "tier": "T1",
+      "threshold": 60,
+      "bodyStatus": "ok",
+      "bodyChars": 2362,
+      "bodyVia": "readability",
+      "bodyDate": null,
+      "collectionBodyChars": 2362,
+      "score": 78,
+      "selected": true,
+      "error": null,
+      "prefilter": {
+        "label": "PASS",
+        "reason": "AI模型驱动合金设计并实验验证"
+      },
+      "scores": {
+        "values": [
+          78,
+          78
+        ]
+      }
+    },
+    {
+      "sourceName": "Google DeepMind",
+      "url": "https://deepmind.google/blog/beyond-tree-cover-mapping-the-worlds-forest-types/",
+      "title": "Beyond tree cover: mapping the world’s forest types",
+      "publishedAt": "2026-10-22T14:30:24.000Z",
+      "publicationTime": "2026-10-22T14:30:24.000Z",
+      "tier": "T1",
+      "threshold": 60,
+      "bodyStatus": "ok",
+      "bodyChars": 8528,
+      "bodyVia": "readability",
+      "bodyDate": "2026-10-22T14:30:00.000Z",
+      "collectionBodyChars": 8528,
+      "score": 58,
+      "selected": false,
+      "error": null,
+      "prefilter": {
+        "label": "PASS",
+        "reason": "DeepMind用AI模型制全球森林类型图"
+      },
+      "scores": {
+        "values": [
+          58,
+          58
+        ]
+      }
+    },
+    {
+      "sourceName": "Google DeepMind",
+      "url": "https://deepmind.google/blog/accelerating-antimicrobial-discovery/",
+      "title": "Accelerating the search for antimicrobial peptides with Google Antigravity",
+      "publishedAt": "2026-10-15T16:08:03.000Z",
+      "publicationTime": "2026-10-15T16:08:03.000Z",
+      "tier": "T1",
+      "threshold": 60,
+      "bodyStatus": "ok",
+      "bodyChars": 7162,
+      "bodyVia": "readability",
+      "bodyDate": "2026-10-15T16:00:00.000Z",
+      "collectionBodyChars": 7162,
+      "score": 58,
+      "selected": false,
+      "error": null,
+      "prefilter": {
+        "label": "PASS",
+        "reason": "Google Antigravity智能体平台与ProtNLM模型用于抗菌肽发现"
+      },
+      "scores": {
+        "values": [
+          58,
+          58
+        ]
+      }
+    },
+    {
+      "sourceName": "量子位",
+      "url": "https://www.qbitai.com/2026/10/505580.html",
+      "title": "钛动科技发布行业首个Pro-Agent, Navos Pro定义结果导向的AI for Work | TGC 2026科技增长大会",
+      "publishedAt": "2026-10-27T03:23:55.000Z",
+      "publicationTime": "2026-10-27T03:23:55.000Z",
+      "tier": "T2",
+      "threshold": 76,
+      "bodyStatus": "ok",
+      "bodyChars": 3372,
+      "bodyVia": "readability",
+      "bodyDate": null,
+      "collectionBodyChars": 3372,
+      "score": 30,
+      "selected": false,
+      "error": null,
+      "prefilter": {
+        "label": "PASS",
+        "reason": "发布Pro-Agent及AI营销技术架构"
+      },
+      "scores": {
+        "values": [
+          38,
+          22
+        ]
+      }
+    },
+    {
+      "sourceName": "量子位",
+      "url": "https://www.qbitai.com/2026/10/505551.html",
+      "title": "刚刚，Anthropic公开335页招股书：史上最大IPO，史上最亏AI公司",
+      "publishedAt": "2026-10-26T16:06:31.000Z",
+      "publicationTime": "2026-10-26T16:06:31.000Z",
+      "tier": "T2",
+      "threshold": 76,
+      "bodyStatus": "ok",
+      "bodyChars": 7913,
+      "bodyVia": "readability",
+      "bodyDate": null,
+      "collectionBodyChars": 7913,
+      "score": 88,
+      "selected": true,
+      "error": null,
+      "prefilter": {
+        "label": "PASS",
+        "reason": "Anthropic大模型公司IPO招股书，含模型与Agent业务"
+      },
+      "scores": {
+        "values": [
+          88,
+          88
+        ]
+      }
+    },
+    {
+      "sourceName": "量子位",
+      "url": "https://www.qbitai.com/2026/10/505539.html",
+      "title": "AI时代，一个人能有多大能量？天禧AI × 观猹大会现场实测个人AI跨端协同新体验",
+      "publishedAt": "2026-10-26T09:46:13.000Z",
+      "publicationTime": "2026-10-26T09:46:13.000Z",
+      "tier": "T2",
+      "threshold": 76,
+      "bodyStatus": "ok",
+      "bodyChars": 2179,
+      "bodyVia": "readability",
+      "bodyDate": null,
+      "collectionBodyChars": 2179,
+      "score": 22,
+      "selected": false,
+      "error": null,
+      "prefilter": {
+        "label": "PASS",
+        "reason": "天禧AI跨端协同、Personal Agent及开发者生态实测"
+      },
+      "scores": {
+        "values": [
+          22,
+          22
+        ]
+      }
+    },
+    {
+      "sourceName": "MIT News · AI",
+      "url": "https://news.mit.edu/2026/making-machines-that-can-listen-paris-smaragdis-1028",
+      "title": "Making machines that can listen",
+      "publishedAt": "2026-10-28T04:00:00.000Z",
+      "publicationTime": "2026-10-28T04:00:00.000Z",
+      "tier": "T1",
+      "threshold": 60,
+      "bodyStatus": "ok",
+      "bodyChars": 9489,
+      "bodyVia": "readability",
+      "bodyDate": null,
+      "collectionBodyChars": 9489,
+      "score": 18,
+      "selected": false,
+      "error": null,
+      "prefilter": {
+        "label": "PASS",
+        "reason": "MIT教授用机器学习让机器听觉理解声音"
+      },
+      "scores": {
+        "values": [
+          18,
+          18
+        ]
+      }
+    },
+    {
+      "sourceName": "MIT News · AI",
+      "url": "https://news.mit.edu/2026/learner-prabha-jha-collaborates-with-mit-peers-to-develop-book-of-ai-insights-1027",
+      "title": "Learner collaborates with MIT peers to develop book of AI insights",
+      "publishedAt": "2026-10-27T20:55:00.000Z",
+      "publicationTime": "2026-10-27T20:55:00.000Z",
+      "tier": "T1",
+      "threshold": 60,
+      "bodyStatus": "ok",
+      "bodyChars": 6591,
+      "bodyVia": "readability",
+      "bodyDate": null,
+      "collectionBodyChars": 6591,
+      "score": 12,
+      "selected": false,
+      "error": null,
+      "prefilter": {
+        "label": "PASS",
+        "reason": "讲述AI学习项目、AI解决方案与AI洞察书籍"
+      },
+      "scores": {
+        "values": [
+          12,
+          12
+        ]
+      }
+    },
+    {
+      "sourceName": "MIT News · AI",
+      "url": "https://news.mit.edu/2026/at-new-york-climate-week-mit-connects-global-network-1026",
+      "title": "At New York Climate Week 2026, MIT connects with a global network",
+      "publishedAt": "2026-10-26T19:00:00.000Z",
+      "publicationTime": "2026-10-26T19:00:00.000Z",
+      "tier": "T1",
+      "threshold": 60,
+      "bodyStatus": "ok",
+      "bodyChars": 7249,
+      "bodyVia": "readability",
+      "bodyDate": null,
+      "collectionBodyChars": 7249,
+      "score": 12,
+      "selected": false,
+      "error": null,
+      "prefilter": {
+        "label": "PASS",
+        "reason": "正文提及AI与气候议题讨论"
+      },
+      "scores": {
+        "values": [
+          12,
+          12
+        ]
+      }
+    },
+    {
+      "sourceName": "极客公园",
+      "url": "http://www.geekpark.net/news/373008",
+      "title": "iPhone Duo 裂屏，是苹果新 CEO 接班后第一次「大考」",
+      "publishedAt": "2026-10-27T09:24:34.000Z",
+      "publicationTime": "2026-10-27T09:24:34.000Z",
+      "tier": "T2",
+      "threshold": 76,
+      "bodyStatus": "ok",
+      "bodyChars": 4319,
+      "bodyVia": "readability",
+      "bodyDate": null,
+      "collectionBodyChars": 4319,
+      "score": 72,
+      "selected": false,
+      "error": null,
+      "prefilter": {
+        "label": "PASS",
+        "reason": "正文提及AI生成假图及AI相关社会影响"
+      },
+      "scores": {
+        "values": [
+          72,
+          72
+        ]
+      }
+    },
+    {
+      "sourceName": "极客公园",
+      "url": "http://www.geekpark.net/news/373006",
+      "title": "看了招股书，我终于知道为什么 Anthropic 不在乎用户了",
+      "publishedAt": "2026-10-27T08:55:13.000Z",
+      "publicationTime": "2026-10-27T08:55:13.000Z",
+      "tier": "T2",
+      "threshold": 76,
+      "bodyStatus": "ok",
+      "bodyChars": 4169,
+      "bodyVia": "readability",
+      "bodyDate": null,
+      "collectionBodyChars": 4169,
+      "score": 78,
+      "selected": true,
+      "error": null,
+      "prefilter": {
+        "label": "PASS",
+        "reason": "Anthropic招股书分析，涉大模型、Claude Code智能体及AI业务"
+      },
+      "scores": {
+        "values": [
+          78,
+          78
+        ]
+      }
+    },
+    {
+      "sourceName": "极客公园",
+      "url": "http://www.geekpark.net/news/373004",
+      "title": "Manus，刚刚悄悄发布了自己的 2.0 宣言",
+      "publishedAt": "2026-10-27T08:49:29.000Z",
+      "publicationTime": "2026-10-27T08:49:29.000Z",
+      "tier": "T2",
+      "threshold": 76,
+      "bodyStatus": "ok",
+      "bodyChars": 4501,
+      "bodyVia": "readability",
+      "bodyDate": null,
+      "collectionBodyChars": 4501,
+      "score": 58,
+      "selected": false,
+      "error": null,
+      "prefilter": {
+        "label": "PASS",
+        "reason": "Manus 2.0与AI Agent组织实践详述"
+      },
+      "scores": {
+        "values": [
+          58,
+          58
+        ]
+      }
+    },
+    {
+      "sourceName": "The Decoder",
+      "url": "https://the-decoder.com/alibabas-latest-qwen-models-routed-some-requests-through-company-servers-researchers-find/",
+      "title": "Alibaba's latest Qwen models routed some requests through company servers, researchers find",
+      "publishedAt": "2026-10-27T19:45:49.000Z",
+      "publicationTime": "2026-10-27T19:45:49.000Z",
+      "tier": "T2",
+      "threshold": 76,
+      "bodyStatus": "ok",
+      "bodyChars": 4677,
+      "bodyVia": "readability",
+      "bodyDate": "2026-10-27T19:45:49.000Z",
+      "collectionBodyChars": 4677,
+      "score": 71,
+      "selected": false,
+      "error": null,
+      "prefilter": {
+        "label": "PASS",
+        "reason": "Qwen模型训练与代理行为研究"
+      },
+      "scores": {
+        "values": [
+          74,
+          68
+        ]
+      }
+    },
+    {
+      "sourceName": "The Decoder",
+      "url": "https://the-decoder.com/google-deepminds-genie-4-puts-a-modern-spin-on-agent-designs-that-predate-llms/",
+      "title": "Google Deepmind's Genie 4 puts a modern spin on agent designs that predate LLMs",
+      "publishedAt": "2026-10-27T17:25:09.000Z",
+      "publicationTime": "2026-10-27T17:25:09.000Z",
+      "tier": "T2",
+      "threshold": 76,
+      "bodyStatus": "ok",
+      "bodyChars": 3434,
+      "bodyVia": "readability",
+      "bodyDate": "2026-10-27T17:25:09.000Z",
+      "collectionBodyChars": 3434,
+      "score": 73,
+      "selected": false,
+      "error": null,
+      "prefilter": {
+        "label": "PASS",
+        "reason": "介绍DeepMind世界模型Genie 4及Gemini规划能力"
+      },
+      "scores": {
+        "values": [
+          74,
+          72
+        ]
+      }
+    },
+    {
+      "sourceName": "The Decoder",
+      "url": "https://the-decoder.com/former-deepmind-researcher-thinks-alphagos-playbook-can-cure-ai-hallucinations/",
+      "title": "Former Deepmind researcher thinks AlphaGo's playbook can cure AI hallucinations",
+      "publishedAt": "2026-10-27T13:55:24.000Z",
+      "publicationTime": "2026-10-27T13:55:24.000Z",
+      "tier": "T2",
+      "threshold": 76,
+      "bodyStatus": "ok",
+      "bodyChars": 5939,
+      "bodyVia": "readability",
+      "bodyDate": "2026-10-27T13:55:24.000Z",
+      "collectionBodyChars": 5939,
+      "score": 40,
+      "selected": false,
+      "error": null,
+      "prefilter": {
+        "label": "PASS",
+        "reason": "前DeepMind研究员提出用AlphaGo思路减少AI幻觉"
+      },
+      "scores": {
+        "values": [
+          38,
+          42
+        ]
+      }
+    }
+  ],
+  "limitations": [
+    "一次性公开样本评测，不代表站点发布、常驻采集或推送验收。",
+    "保留评分结论供人工核对；本文件不能替代原始付费请求回执。"
+  ]
+}

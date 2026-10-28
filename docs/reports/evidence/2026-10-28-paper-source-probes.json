@@ -1,0 +1,195 @@
+{
+  "date": "2026-10-28",
+  "method": "Public free GET; existing RSS parser; one abstract page sample per category; no database mutation/model calls/PDF extraction.",
+  "results": [
+    {
+      "name": "arXiv cs.CL",
+      "url": "https://rss.arxiv.org/rss/cs.CL",
+      "kind": "rss",
+      "count": 176,
+      "dated": 176,
+      "samples": [
+        {
+          "title": "ReCoPII: A Relation-Grounded Framework for Building Contextual PII Masking Datasets",
+          "url": "https://arxiv.org/abs/2610.35925",
+          "date": "2026-10-28T04:00:00.000Z",
+          "excerptChars": 1458,
+          "bodyChars": 0,
+          "pageChars": 1802,
+          "pageDate": null,
+          "publicationTime": "2026-10-28T04:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "name": "arXiv cs.AI",
+      "url": "https://rss.arxiv.org/rss/cs.AI",
+      "kind": "rss",
+      "count": 407,
+      "dated": 407,
+      "samples": [
+        {
+          "title": "Counting the Bandages: On measuring the time that AI saves",
+          "url": "https://arxiv.org/abs/2610.35942",
+          "date": "2026-10-28T04:00:00.000Z",
+          "excerptChars": 1963,
+          "bodyChars": 0,
+          "pageChars": 2464,
+          "pageDate": null,
+          "publicationTime": "2026-10-28T04:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "name": "arXiv cs.LG",
+      "url": "https://rss.arxiv.org/rss/cs.LG",
+      "kind": "rss",
+      "count": 437,
+      "dated": 437,
+      "samples": [
+        {
+          "title": "KORA: Deterministic-First Execution Control for AI Workloads",
+          "url": "https://arxiv.org/abs/2610.35869",
+          "date": "2026-10-28T04:00:00.000Z",
+          "excerptChars": 1651,
+          "bodyChars": 0,
+          "pageChars": 2048,
+          "pageDate": null,
+          "publicationTime": "2026-10-28T04:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "name": "arXiv cs.CV",
+      "url": "https://rss.arxiv.org/rss/cs.CV",
+      "kind": "rss",
+      "count": 245,
+      "dated": 245,
+      "samples": [
+        {
+          "title": "ObjectTwin: Measuring the Asset Correspondence Gap for Capture-Anchored Digital Twins",
+          "url": "https://arxiv.org/abs/2610.35904",
+          "date": "2026-10-28T04:00:00.000Z",
+          "excerptChars": 1386,
+          "bodyChars": 0,
+          "pageChars": 1711,
+          "pageDate": null,
+          "publicationTime": "2026-10-28T04:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "name": "Hugging Face Daily Papers",
+      "url": "https://huggingface.co/api/daily_papers?limit=3",
+      "kind": "json",
+      "error": "The operation was aborted due to timeout"
+    },
+    {
+      "name": "ACL Anthology",
+      "url": "https://aclanthology.org/",
+      "kind": "web",
+      "status": 200,
+      "title": "ACL Anthology",
+      "paperLinks": [
+        {
+          "text": "Feedback",
+          "href": "/faq/feedback/"
+        },
+        {
+          "text": "Feedback",
+          "href": "/faq/#feedback"
+        },
+        {
+          "text": "2026",
+          "href": "/events/aimecon-2026/"
+        },
+        {
+          "text": "2026",
+          "href": "/events/cl-2026/"
+        },
+        {
+          "text": "2026",
+          "href": "/events/emnlp-2026/"
+        },
+        {
+          "text": "2026",
+          "href": "/events/evalita-2026/"
+        },
+        {
+          "text": "2026",
+          "href": "/events/icnlsp-2026/"
+        },
+        {
+          "text": "2026",
+          "href": "/events/stil-2026/"
+        },
+        {
+          "text": "2026",
+          "href": "/events/tacl-2026/"
+        },
+        {
+          "text": "2026",
+          "href": "/events/acl-2026/"
+        },
+        {
+          "text": "2026",
+          "href": "/events/eacl-2026/"
+        },
+        {
+          "text": "2026",
+          "href": "/events/findings-2026/"
+        }
+      ]
+    },
+    {
+      "name": "OpenReview ICLR 2026",
+      "url": "https://api2.openreview.net/notes?content.venueid=ICLR.cc%2F2026%2FConference&limit=3",
+      "kind": "json",
+      "status": 403,
+      "bytes": 317,
+      "arraySize": null,
+      "keys": [
+        "name",
+        "message",
+        "status",
+        "details"
+      ],
+      "error": "ChallengeRequiredError",
+      "responseMessage": "Challenge verification required"
+    },
+    {
+      "name": "CVF CVPR 2026",
+      "url": "https://openaccess.thecvf.com/CVPR2026?day=all",
+      "kind": "web",
+      "error": "Response too large from openaccess.thecvf.com"
+    }
+  ],
+  "arxivApi": [
+    {
+      "name": "arXiv API cs.CL",
+      "url": "https://export.arxiv.org/api/query?search_query=cat%3Acs.CL&start=0&max_results=3&sortBy=submittedDate&sortOrder=descending",
+      "count": 3,
+      "samples": [
+        {
+          "url": "https://arxiv.org/abs/2610.37657v1",
+          "title": "Heads of Security: Learned Attention Gates Improve Prompt Injection Robustness",
+          "date": "2026-10-27T17:58:52.000Z",
+          "excerptChars": 1595
+        },
+        {
+          "url": "https://arxiv.org/abs/2610.37651v1",
+          "title": "GEPA-Curator: Curated Learning for Self Improving Agents",
+          "date": "2026-10-27T17:58:11.000Z",
+          "excerptChars": 1273
+        },
+        {
+          "url": "https://arxiv.org/abs/2610.37649v1",
+          "title": "Can LLMs Uncover Hidden Physical Laws through Free Exploration?",
+          "date": "2026-10-27T17:57:00.000Z",
+          "excerptChars": 1186
+        }
+      ]
+    }
+  ],
+  "evidenceScope": "裁减后的公开验证摘要；不含原始运行快照、回执、预算用量或审计数据，完整原件仅在本机保留。"
+}

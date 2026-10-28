@@ -1,0 +1,145 @@
+{
+  "date": "2026-10-28",
+  "evidenceScope": "裁减后的公开验证摘要；不含原始运行快照、回执、预算用量或审计数据，完整原件仅在本机保留。",
+  "historicalScope": "第二批接入当时的公开摘要；ACL 当时为禁用待接入，随后移除的决定见配套报告。",
+  "summary": {
+    "categories": [
+      "cs.LG",
+      "cs.CV"
+    ],
+    "enabledSourceCount": 2,
+    "initialIntervalMinutes": 180,
+    "uniqueSeedPaperCount": 6,
+    "seedPapersPerCategory": 3,
+    "formalAnalysisCompletedAtSnapshot": false,
+    "aiContentPushDisabled": true,
+    "aiDeliveryCount": 0
+  },
+  "arxivPreflight": [
+    {
+      "category": "cs.LG",
+      "name": "arXiv 论文摘要 · 大模型训练与优化 · cs.LG",
+      "listed": 100,
+      "admitted": 15,
+      "firstImport": [
+        {
+          "title": "MuonGS: Pretraining LLMs with Relaxed Weight-Norm Control",
+          "url": "https://arxiv.org/abs/2610.37647v1",
+          "publishedAt": "2026-10-27T17:56:40.000Z",
+          "excerptChars": 1901
+        },
+        {
+          "title": "Follow the Gradient: Tracing Safety Degradation Back to Training Data",
+          "url": "https://arxiv.org/abs/2610.37481v1",
+          "publishedAt": "2026-10-27T16:08:08.000Z",
+          "excerptChars": 1693
+        },
+        {
+          "title": "When Visual Evidence Is Insufficient: How Instructions, Post-Training, and Internal Activations Shape Refusal in Multimodal Language Models",
+          "url": "https://arxiv.org/abs/2610.37430v1",
+          "publishedAt": "2026-10-27T15:42:20.000Z",
+          "excerptChars": 1679
+        }
+      ]
+    },
+    {
+      "category": "cs.CV",
+      "name": "arXiv 论文摘要 · 多模态与视觉评测 · cs.CV",
+      "listed": 100,
+      "admitted": 27,
+      "firstImport": [
+        {
+          "title": "VideoLVR: Latent Visual Reasoning over Grounded Video Evidence",
+          "url": "https://arxiv.org/abs/2610.37613v1",
+          "publishedAt": "2026-10-27T17:41:56.000Z",
+          "excerptChars": 1847
+        },
+        {
+          "title": "MoI-Bench: A Benchmark for Image Generation and Editing on Mobile Devices",
+          "url": "https://arxiv.org/abs/2610.37599v1",
+          "publishedAt": "2026-10-27T17:31:40.000Z",
+          "excerptChars": 1868
+        },
+        {
+          "title": "ReferStream: Interactive Subject Injection for Streaming Video Generation",
+          "url": "https://arxiv.org/abs/2610.37566v1",
+          "publishedAt": "2026-10-27T17:12:42.000Z",
+          "excerptChars": 1616
+        }
+      ]
+    }
+  ],
+  "publicSeedPapers": [
+    {
+      "title": "ReferStream: Interactive Subject Injection for Streaming Video Generation",
+      "url": "https://arxiv.org/abs/2610.37566v1",
+      "publishedAt": "2026-10-27T17:12:42.000Z"
+    },
+    {
+      "title": "MoI-Bench: A Benchmark for Image Generation and Editing on Mobile Devices",
+      "url": "https://arxiv.org/abs/2610.37599v1",
+      "publishedAt": "2026-10-27T17:31:40.000Z"
+    },
+    {
+      "title": "VideoLVR: Latent Visual Reasoning over Grounded Video Evidence",
+      "url": "https://arxiv.org/abs/2610.37613v1",
+      "publishedAt": "2026-10-27T17:41:56.000Z"
+    },
+    {
+      "title": "When Visual Evidence Is Insufficient: How Instructions, Post-Training, and Internal Activations Shape Refusal in Multimodal Language Models",
+      "url": "https://arxiv.org/abs/2610.37430v1",
+      "publishedAt": "2026-10-27T15:42:20.000Z"
+    },
+    {
+      "title": "Follow the Gradient: Tracing Safety Degradation Back to Training Data",
+      "url": "https://arxiv.org/abs/2610.37481v1",
+      "publishedAt": "2026-10-27T16:08:08.000Z"
+    },
+    {
+      "title": "MuonGS: Pretraining LLMs with Relaxed Weight-Norm Control",
+      "url": "https://arxiv.org/abs/2610.37647v1",
+      "publishedAt": "2026-10-27T17:56:40.000Z"
+    }
+  ],
+  "aclNetworkChecks": [
+    {
+      "url": "https://aclanthology.org/",
+      "status": 200,
+      "bytes": 750463,
+      "title": "ACL Anthology"
+    },
+    {
+      "url": "https://aclanthology.org/events/emnlp-2026/",
+      "error": "The operation was aborted due to timeout"
+    },
+    {
+      "url": "https://aclanthology.org/events/acl-2026/",
+      "error": "The operation was aborted due to timeout"
+    }
+  ],
+  "aclDateEvidence": [
+    {
+      "url": "https://aclanthology.org/2026.emnlp-main.1/",
+      "officialMetadata": {
+        "month": "October",
+        "year": "2026"
+      },
+      "precision": "month",
+      "dayVerified": false
+    },
+    {
+      "url": "https://aclanthology.org/2026.acl-long.1/",
+      "officialMetadata": {
+        "month": "July",
+        "year": "2026"
+      },
+      "precision": "month",
+      "dayVerified": false
+    }
+  ],
+  "limitations": [
+    "每类最新 100 条为本次预检窗口，不代表完整分页或长期全量覆盖。",
+    "ACL 样本只验证到月份，未补造具体日，不作为已验收自动采集器。",
+    "本次首次导入不代表正式筛选、写作和长期运行验收完成。"
+  ]
+}

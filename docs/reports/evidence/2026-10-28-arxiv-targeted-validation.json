@@ -1,0 +1,225 @@
+{
+  "date": "2026-10-28",
+  "evidenceScope": "裁减后的公开验证摘要；不含原始运行快照、回执、预算用量或审计数据，完整原件仅在本机保留。",
+  "method": {
+    "model": "deepseek/deepseek-flash",
+    "threshold": 60,
+    "materialScope": "Only author abstracts; no full paper or peer-review verification. T1 is an in-memory evaluation assumption, no source has been created."
+  },
+  "collectionQueries": [
+    {
+      "category": "cs.CL",
+      "query": "cat:cs.CL AND (ti:\"large language model\" OR abs:\"large language model\" OR ti:LLM OR abs:LLM OR ti:agent OR abs:\"language agent\" OR abs:\"LLM agent\" OR ti:RAG OR abs:\"retrieval augmented\" OR abs:\"retrieval-augmented\" OR ti:benchmark OR ti:evaluation OR abs:\"language model evaluation\") AND submittedDate:[202609280622 TO 202610280622]",
+      "url": "https://export.arxiv.org/api/query?search_query=cat%3Acs.CL+AND+%28ti%3A%22large+language+model%22+OR+abs%3A%22large+language+model%22+OR+ti%3ALLM+OR+abs%3ALLM+OR+ti%3Aagent+OR+abs%3A%22language+agent%22+OR+abs%3A%22LLM+agent%22+OR+ti%3ARAG+OR+abs%3A%22retrieval+augmented%22+OR+abs%3A%22retrieval-augmented%22+OR+ti%3Abenchmark+OR+ti%3Aevaluation+OR+abs%3A%22language+model+evaluation%22%29+AND+submittedDate%3A%5B202609280622+TO+202610280622%5D&start=0&max_results=3&sortBy=submittedDate&sortOrder=descending",
+      "totalMatches": 2179
+    },
+    {
+      "category": "cs.AI",
+      "query": "cat:cs.AI AND (ti:\"large language model\" OR abs:\"large language model\" OR ti:LLM OR abs:LLM OR ti:agent OR abs:\"language agent\" OR abs:\"LLM agent\" OR ti:RAG OR abs:\"retrieval augmented\" OR abs:\"retrieval-augmented\" OR ti:benchmark OR ti:evaluation OR abs:\"language model evaluation\") AND submittedDate:[202609280622 TO 202610280622]",
+      "url": "https://export.arxiv.org/api/query?search_query=cat%3Acs.AI+AND+%28ti%3A%22large+language+model%22+OR+abs%3A%22large+language+model%22+OR+ti%3ALLM+OR+abs%3ALLM+OR+ti%3Aagent+OR+abs%3A%22language+agent%22+OR+abs%3A%22LLM+agent%22+OR+ti%3ARAG+OR+abs%3A%22retrieval+augmented%22+OR+abs%3A%22retrieval-augmented%22+OR+ti%3Abenchmark+OR+ti%3Aevaluation+OR+abs%3A%22language+model+evaluation%22%29+AND+submittedDate%3A%5B202609280622+TO+202610280622%5D&start=0&max_results=3&sortBy=submittedDate&sortOrder=descending",
+      "totalMatches": 3689
+    }
+  ],
+  "categorySamples": {
+    "cs.CL": [
+      "2610.37651",
+      "2610.37649",
+      "2610.37645"
+    ],
+    "cs.AI": [
+      "2610.37649",
+      "2610.37647",
+      "2610.37624"
+    ]
+  },
+  "summary": {
+    "categoryCount": 2,
+    "categorySampleCount": 6,
+    "uniquePaperCount": 5,
+    "selected": 0,
+    "notSelected": 5,
+    "evaluationErrors": 0
+  },
+  "results": [
+    {
+      "paperId": "2610.37651",
+      "version": "v1",
+      "url": "https://arxiv.org/abs/2610.37651v1",
+      "title": "GEPA-Curator: Curated Learning for Self Improving Agents",
+      "sampleCategories": [
+        "cs.CL"
+      ],
+      "publishedAt": "2026-10-27T17:58:11.000Z",
+      "updatedAt": "2026-10-27T17:58:11.000Z",
+      "abstractChars": 1273,
+      "materialScope": "abstract-only",
+      "tier": "T1",
+      "threshold": 60,
+      "score": 36,
+      "selected": false,
+      "error": null,
+      "label": "GEPA-Curator：Agent 学习经验筛选",
+      "summary": "在提示优化前筛选可靠任务，并检索过去的成功轨迹，减少噪声失败样本干扰。作者在多类 Agent 任务中报告效果改善，本轮未核验实验。",
+      "topics": [
+        "Agent",
+        "检索辅助提示优化"
+      ],
+      "prefilter": {
+        "label": "PASS",
+        "reason": "LLM智能体提示优化框架与评测"
+      },
+      "scores": {
+        "values": [
+          38,
+          34
+        ]
+      }
+    },
+    {
+      "paperId": "2610.37649",
+      "version": "v1",
+      "url": "https://arxiv.org/abs/2610.37649v1",
+      "title": "Can LLMs Uncover Hidden Physical Laws through Free Exploration?",
+      "sampleCategories": [
+        "cs.CL",
+        "cs.AI"
+      ],
+      "publishedAt": "2026-10-27T17:57:00.000Z",
+      "updatedAt": "2026-10-27T17:57:00.000Z",
+      "abstractChars": 1186,
+      "materialScope": "abstract-only",
+      "tier": "T1",
+      "threshold": 60,
+      "score": 52,
+      "selected": false,
+      "error": null,
+      "label": "LLM 自主探索隐藏物理规律",
+      "summary": "构造物理规律被改变的模拟世界，评测模型能否在没有明确研究任务提示时自主实验并发现规律。摘要报告受测模型的自主发现能力仍有限。",
+      "topics": [
+        "大模型",
+        "Agent",
+        "评测"
+      ],
+      "prefilter": {
+        "label": "PASS",
+        "reason": "LLM探索隐藏物理定律的评测框架"
+      },
+      "scores": {
+        "values": [
+          47,
+          58
+        ]
+      }
+    },
+    {
+      "paperId": "2610.37645",
+      "version": "v1",
+      "url": "https://arxiv.org/abs/2610.37645v1",
+      "title": "Multi-State Linear Attention with Generalized Second-Order Routing",
+      "sampleCategories": [
+        "cs.CL"
+      ],
+      "publishedAt": "2026-10-27T17:55:49.000Z",
+      "updatedAt": "2026-10-27T17:55:49.000Z",
+      "abstractChars": 1573,
+      "materialScope": "abstract-only",
+      "tier": "T1",
+      "threshold": 60,
+      "score": 34,
+      "selected": false,
+      "error": null,
+      "label": "MERLIN：多状态线性注意力路由",
+      "summary": "用键向量的一阶、二阶矩改进多状态线性注意力的信息汇聚。作者报告长上下文检索和问答指标提升，本轮未核验完整实验及资源成本。",
+      "topics": [
+        "大模型架构",
+        "长上下文"
+      ],
+      "prefilter": {
+        "label": "PASS",
+        "reason": "论文提出线性注意力新方法，属AI模型技术"
+      },
+      "scores": {
+        "values": [
+          34,
+          34
+        ]
+      }
+    },
+    {
+      "paperId": "2610.37647",
+      "version": "v1",
+      "url": "https://arxiv.org/abs/2610.37647v1",
+      "title": "MuonGS: Pretraining LLMs with Relaxed Weight-Norm Control",
+      "sampleCategories": [
+        "cs.AI"
+      ],
+      "publishedAt": "2026-10-27T17:56:40.000Z",
+      "updatedAt": "2026-10-27T17:56:40.000Z",
+      "abstractChars": 1901,
+      "materialScope": "abstract-only",
+      "tier": "T1",
+      "threshold": 60,
+      "score": 34,
+      "selected": false,
+      "error": null,
+      "label": "MuonGS：预训练优化器的范数控制",
+      "summary": "通过 Gram–Schmidt 投影去除更新的径向分量，放松固定权重范数约束。作者给出理论分析，并在小规模模型预训练中报告困惑度改善。",
+      "topics": [
+        "大模型训练",
+        "优化器"
+      ],
+      "prefilter": {
+        "label": "PASS",
+        "reason": "LLM预训练优化器论文，明确AI技术"
+      },
+      "scores": {
+        "values": [
+          34,
+          34
+        ]
+      }
+    },
+    {
+      "paperId": "2610.37624",
+      "version": "v1",
+      "url": "https://arxiv.org/abs/2610.37624v1",
+      "title": "Rare, Relevant, and Still Wrong: How Memory Fails LLM Group Decisions",
+      "sampleCategories": [
+        "cs.AI"
+      ],
+      "publishedAt": "2026-10-27T17:49:39.000Z",
+      "updatedAt": "2026-10-27T17:49:39.000Z",
+      "abstractChars": 1501,
+      "materialScope": "abstract-only",
+      "tier": "T1",
+      "threshold": 60,
+      "score": 38,
+      "selected": false,
+      "error": null,
+      "label": "CrossProfile：多 Agent 记忆与群体决策",
+      "summary": "构造可控评测，检验群体讨论记忆中的信息选择。摘要指出，仅保留相关或稀有信息可能留下诱导证据，信息的多人归属还可能引入从众偏差。",
+      "topics": [
+        "Agent",
+        "记忆检索",
+        "评测"
+      ],
+      "prefilter": {
+        "label": "PASS",
+        "reason": "论文研究LLM群体决策记忆机制与评测基准"
+      },
+      "scores": {
+        "values": [
+          38,
+          38
+        ]
+      }
+    }
+  ],
+  "limitations": [
+    "Author abstracts only; no full-text reading, peer-review or experimental verification.",
+    "Six category entries, five unique papers; cross-list duplicate scored once.",
+    "No dedicated document-RAG paper in this newest-first sample; RAG-specific scoring coverage unverified.",
+    "T1 source tier is an in-memory evaluation assumption using the current threshold 60.",
+    "No sources/articles/publications created; no continuous collection or notifications started."
+  ]
+}

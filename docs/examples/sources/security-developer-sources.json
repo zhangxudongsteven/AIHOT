@@ -1,0 +1,47 @@
+{
+  "sources": [
+    {
+      "id": "sec-rss-nodejs-security",
+      "name": "Node.js Security Releases",
+      "kind": "rss",
+      "config": {
+        "feedUrl": "https://nodejs.org/en/feed/vulnerability.xml",
+        "acceptLanguage": "en-US,en;q=0.9",
+        "fetchPublicContent": true,
+        "allowUrlPrefixes": ["https://nodejs.org/en/blog/vulnerability/"],
+        "_aihot": { "initialBackfillLimit": 3 }
+      },
+      "tier": "T1",
+      "participation_mode": "editorial",
+      "interval_minutes": 60,
+      "tags": ["官方", "Node.js", "开发安全"],
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "enabled": true
+    },
+    {
+      "id": "sec-web-spring-security",
+      "name": "Spring Security Advisories",
+      "kind": "web_list",
+      "config": {
+        "url": "https://spring.io/security/",
+        "parseMode": "html",
+        "itemSelector": "table tbody tr:has(a[href^='/security/cve-'])",
+        "linkSelector": "a[href^='/security/cve-']",
+        "titleSelector": "a[href^='/security/cve-']",
+        "publishedAtSelector": "td:nth-child(4)",
+        "publishedAtUtcOffset": "+00:00",
+        "allowUrlPrefixes": ["https://spring.io/security/cve-"],
+        "acceptLanguage": "en-US,en;q=0.9",
+        "_aihot": { "initialBackfillLimit": 3 }
+      },
+      "tier": "T1",
+      "participation_mode": "editorial",
+      "interval_minutes": 60,
+      "tags": ["官方", "Spring", "Java", "开发安全"],
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "enabled": true
+    }
+  ]
+}

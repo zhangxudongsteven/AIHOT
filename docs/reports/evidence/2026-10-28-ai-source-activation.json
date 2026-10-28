@@ -1,0 +1,38 @@
+{
+  "date": "2026-10-28",
+  "evidenceScope": "裁减后的公开验证摘要；不含原始运行快照、回执、预算用量或审计数据，完整原件仅在本机保留。",
+  "historicalScope": "分批启用后的首次摘要，后两批当时仍待运行；不表示当前后台状态。",
+  "summary": {
+    "newlyEnabledSources": [
+      "DeepSeek 官方更新日志",
+      "Anthropic News",
+      "Google DeepMind",
+      "上海人工智能实验室",
+      "量子位"
+    ],
+    "alreadyEnabledSource": "a16z News",
+    "heldDisabledSources": [
+      "极客公园",
+      "MIT News · AI",
+      "The Decoder"
+    ],
+    "initialIntervalMinutes": 180,
+    "initialBackfillLimit": 5,
+    "initialBackfillMonths": 1,
+    "batchCount": 3,
+    "completedBatchCount": 1,
+    "pendingBatchCount": 2,
+    "firstBatch": {
+      "source": "DeepSeek 官方更新日志",
+      "listed": 24,
+      "newArticles": 2,
+      "revisedArticles": 0
+    },
+    "aiContentPushDisabled": true,
+    "aiDeliveryCount": 0
+  },
+  "limitations": [
+    "启用与首次结果只对应报告记录时点；后续采集、模型处理与长期稳定性不在此摘要中验收。",
+    "本次归档不执行来源导入、启用或推送。"
+  ]
+}

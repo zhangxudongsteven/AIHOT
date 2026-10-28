@@ -1,0 +1,182 @@
+{
+  "date": "2026-10-28",
+  "evidenceScope": "裁减后的公开验证摘要；不含原始运行快照、回执、预算用量或审计数据，完整原件仅在本机保留。",
+  "method": {
+    "model": "deepseek/deepseek-flash",
+    "threshold": 60,
+    "method": "Title/abstract topic check, then existing two-score step. No model prefilter call; no threshold changes. Author abstracts only; no full paper or peer-review verification. T1 is an in-memory evaluation assumption."
+  },
+  "queries": [
+    {
+      "category": "cs.CL",
+      "query": "cat:cs.CL AND (ti:\"retrieval augmented\" OR abs:\"retrieval augmented\" OR ti:\"retrieval-augmented\" OR abs:\"retrieval-augmented\" OR (ti:RAG AND (abs:retrieval OR abs:generation)) OR ((ti:retrieval OR abs:\"retrieval evaluation\") AND (ti:evaluation OR ti:benchmark OR abs:\"retrieval evaluation\" OR abs:\"retrieval benchmark\"))) AND submittedDate:[202609280626 TO 202610280626]",
+      "url": "https://export.arxiv.org/api/query?search_query=cat%3Acs.CL+AND+%28ti%3A%22retrieval+augmented%22+OR+abs%3A%22retrieval+augmented%22+OR+ti%3A%22retrieval-augmented%22+OR+abs%3A%22retrieval-augmented%22+OR+%28ti%3ARAG+AND+%28abs%3Aretrieval+OR+abs%3Ageneration%29%29+OR+%28%28ti%3Aretrieval+OR+abs%3A%22retrieval+evaluation%22%29+AND+%28ti%3Aevaluation+OR+ti%3Abenchmark+OR+abs%3A%22retrieval+evaluation%22+OR+abs%3A%22retrieval+benchmark%22%29%29%29+AND+submittedDate%3A%5B202609280626+TO+202610280626%5D&start=0&max_results=3&sortBy=submittedDate&sortOrder=descending",
+      "totalMatches": 124
+    },
+    {
+      "category": "cs.AI",
+      "query": "cat:cs.AI AND (ti:\"retrieval augmented\" OR abs:\"retrieval augmented\" OR ti:\"retrieval-augmented\" OR abs:\"retrieval-augmented\" OR (ti:RAG AND (abs:retrieval OR abs:generation)) OR ((ti:retrieval OR abs:\"retrieval evaluation\") AND (ti:evaluation OR ti:benchmark OR abs:\"retrieval evaluation\" OR abs:\"retrieval benchmark\"))) AND submittedDate:[202609280626 TO 202610280626]",
+      "url": "https://export.arxiv.org/api/query?search_query=cat%3Acs.AI+AND+%28ti%3A%22retrieval+augmented%22+OR+abs%3A%22retrieval+augmented%22+OR+ti%3A%22retrieval-augmented%22+OR+abs%3A%22retrieval-augmented%22+OR+%28ti%3ARAG+AND+%28abs%3Aretrieval+OR+abs%3Ageneration%29%29+OR+%28%28ti%3Aretrieval+OR+abs%3A%22retrieval+evaluation%22%29+AND+%28ti%3Aevaluation+OR+ti%3Abenchmark+OR+abs%3A%22retrieval+evaluation%22+OR+abs%3A%22retrieval+benchmark%22%29%29%29+AND+submittedDate%3A%5B202609280626+TO+202610280626%5D&start=0&max_results=3&sortBy=submittedDate&sortOrder=descending",
+      "totalMatches": 133
+    }
+  ],
+  "categorySamples": {
+    "cs.CL": [
+      "2610.37162",
+      "2610.36991",
+      "2610.36915"
+    ],
+    "cs.AI": [
+      "2610.37242",
+      "2610.36991",
+      "2610.36444"
+    ]
+  },
+  "summary": {
+    "categoryCount": 2,
+    "categorySampleCount": 6,
+    "uniquePaperCount": 5,
+    "selected": 0,
+    "notSelected": 5,
+    "evaluationErrors": 0
+  },
+  "results": [
+    {
+      "paperId": "2610.37162",
+      "version": "v1",
+      "url": "https://arxiv.org/abs/2610.37162v1",
+      "title": "Coverage Under Contradiction: A Benchmark for Negation-Aware Retrieval",
+      "sampleCategories": [
+        "cs.CL"
+      ],
+      "publishedAt": "2026-10-27T12:54:48.000Z",
+      "updatedAt": "2026-10-27T12:54:48.000Z",
+      "abstractChars": 1395,
+      "materialScope": "abstract-only",
+      "topicCheck": "in-scope, reviewed from title and abstract; no model prefilter",
+      "tier": "T1",
+      "threshold": 60,
+      "score": 38,
+      "selected": false,
+      "error": null,
+      "label": "CoverageBench-Negate：矛盾证据检索评测",
+      "summaryZh": "构造受控的否定证据，检验检索器是否能找到与模型先验冲突的材料。作者在该基准上比较 BM25 和稠密检索器，讨论语义相关性与事实矛盾识别的差别。",
+      "scores": {
+        "values": [
+          38,
+          38
+        ]
+      }
+    },
+    {
+      "paperId": "2610.36991",
+      "version": "v1",
+      "url": "https://arxiv.org/abs/2610.36991v1",
+      "title": "SpectRAG: Weighted Chunk Graphs for Token-Budgeted Context Selection in Multi-Hop Retrieval-Augmented Generation",
+      "sampleCategories": [
+        "cs.CL",
+        "cs.AI"
+      ],
+      "publishedAt": "2026-10-27T10:38:29.000Z",
+      "updatedAt": "2026-10-27T10:38:29.000Z",
+      "abstractChars": 1860,
+      "materialScope": "abstract-only",
+      "topicCheck": "in-scope, reviewed from title and abstract; no model prefilter",
+      "tier": "T1",
+      "threshold": 60,
+      "score": 34,
+      "selected": false,
+      "error": null,
+      "label": "SpectRAG：多跳检索的上下文选择",
+      "summaryZh": "把文档块组织为加权图，结合混合检索、图扩展和谱相关性，在固定 token 预算下选择上下文。摘要报告证据覆盖改善，也指出精度、计算成本和领域差异的权衡。",
+      "scores": {
+        "values": [
+          34,
+          34
+        ]
+      }
+    },
+    {
+      "paperId": "2610.36915",
+      "version": "v1",
+      "url": "https://arxiv.org/abs/2610.36915v1",
+      "title": "Do We Need an LLM to Know Why Sources Conflict? Decision Models for Knowledge-Conflict Typing in RAG",
+      "sampleCategories": [
+        "cs.CL"
+      ],
+      "publishedAt": "2026-10-27T09:43:21.000Z",
+      "updatedAt": "2026-10-27T09:43:21.000Z",
+      "abstractChars": 1906,
+      "materialScope": "abstract-only",
+      "topicCheck": "in-scope, reviewed from title and abstract; no model prefilter",
+      "tier": "T1",
+      "threshold": 60,
+      "score": 34,
+      "selected": false,
+      "error": null,
+      "label": "RAG 知识冲突分类的决策模型",
+      "summaryZh": "比较决策模型与生成式 LLM 对检索来源冲突的分类能力，并按模型不确定性做级联。作者报告成本和延迟优势，同时指出准确率、虚假来源识别及顺序敏感性方面的局限。",
+      "scores": {
+        "values": [
+          34,
+          34
+        ]
+      }
+    },
+    {
+      "paperId": "2610.37242",
+      "version": "v1",
+      "url": "https://arxiv.org/abs/2610.37242v1",
+      "title": "Grounding LLM Agents in Business Processes: Process-Aware Knowledge Graphs for Reliable Multi-Step Service Invocation",
+      "sampleCategories": [
+        "cs.AI"
+      ],
+      "publishedAt": "2026-10-27T13:45:29.000Z",
+      "updatedAt": "2026-10-27T13:45:29.000Z",
+      "abstractChars": 1547,
+      "materialScope": "abstract-only",
+      "topicCheck": "in-scope, reviewed from title and abstract; no model prefilter",
+      "tier": "T1",
+      "threshold": 60,
+      "score": 36,
+      "selected": false,
+      "error": null,
+      "label": "流程知识图谱辅助企业 Agent 检索",
+      "summaryZh": "把 OData 元数据与 BPMN 业务流程组织为类型化图，在发现服务端点时同时检索流程和结构约束。作者在限定企业服务任务中报告多步调用可靠性改善，缺少流程层时未见同类收益。",
+      "scores": {
+        "values": [
+          34,
+          38
+        ]
+      }
+    },
+    {
+      "paperId": "2610.36444",
+      "version": "v1",
+      "url": "https://arxiv.org/abs/2610.36444v1",
+      "title": "RouteDRAG: Learning to Route and Control Agentic Execution for Multimodal Document RAG",
+      "sampleCategories": [
+        "cs.AI"
+      ],
+      "publishedAt": "2026-10-27T00:45:49.000Z",
+      "updatedAt": "2026-10-27T00:45:49.000Z",
+      "abstractChars": 1658,
+      "materialScope": "abstract-only",
+      "topicCheck": "in-scope, reviewed from title and abstract; no model prefilter",
+      "tier": "T1",
+      "threshold": 60,
+      "score": 34,
+      "selected": false,
+      "error": null,
+      "label": "RouteDRAG：多模态文档 RAG 路由",
+      "summaryZh": "根据查询预测是否需要 Agent，再动态控制工具使用与终止。作者在两个基准上报告，相比统一执行 Agent，该方法以较少调用取得更好的准确率。",
+      "scores": {
+        "values": [
+          34,
+          34
+        ]
+      }
+    }
+  ],
+  "scope": "Abstract-only topic verification and existing double scoring; no model prefilter; no full-paper or experimental verification; no sources or articles created."
+}
