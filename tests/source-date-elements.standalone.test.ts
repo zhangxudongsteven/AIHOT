@@ -31,6 +31,30 @@ test("a listing uses the visible date when its tooltip is not a publication date
   assert.equal(items[0]!.publishedAt?.toISOString(), "2026-09-11T00:00:00.000Z");
 });
 
+test("a listing's explicit date element reads relative labels with their source precision", (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-10-24T10:30:00Z") });
+  const labels = ["47小时前", "2天前", "版面之外·今天 15:46", "16h ago"];
+  const listing = labels.map((label, i) => `<article><a href="/post-${i}">Post ${i}</a><span>${label}</span></article>`).join("");
+  const items = fromHtml(listing, base, { config: { url: base, itemSelector: "article", publishedAtSelector: "span" } } as never);
+  assert.deepEqual(items.map(({ publishedAt, publicationTime }) => ({ publishedAt: publishedAt?.toISOString(), publicationTime })), [
+    { publishedAt: "2026-10-22T11:30:00.000Z", publicationTime: "2026-10-22T11:30:00.000Z" },
+    { publishedAt: "2026-10-21T16:00:00.000Z", publicationTime: "2026-10-22" },
+    { publishedAt: "2026-10-24T07:46:00.000Z", publicationTime: "2026-10-24T07:46:00.000Z" },
+    { publishedAt: "2026-10-23T18:30:00.000Z", publicationTime: "2026-10-23T18:30:00.000Z" },
+  ]);
+});
+
+test("absolute date metadata takes precedence over a relative label; unrelated prose is no date", (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-10-24T01:30:00Z") });
+  const listing = '<article><a href="/dated">Dated</a><time datetime="2026-10-20">2天前</time></article>' +
+    '<article><a href="/undated">Undated</a><time>两天前开业的店</time></article>';
+  const items = fromHtml(listing, base, { config: { url: base, itemSelector: "article", publishedAtSelector: "time", publishedAtUtcOffset: "-03:00" } } as never);
+  assert.equal(items[0]!.publishedAt?.toISOString(), "2026-10-20T03:00:00.000Z");
+  assert.equal(items[0]!.publicationTime, "2026-10-20");
+  assert.equal(items[1]!.publishedAt, null);
+  assert.equal(items[1]!.publicationTime, null);
+});
+
 test("a detail date selector reads meta content and an invalid tooltip does not mask visible text", async () => {
   for (const [publishedAtSelector, expected] of [["meta[name='date']", "2026-09-11T19:58:33.000Z"], ["span", "2026-09-11T00:00:00.000Z"]]) {
     const item = await fetchDetail(base + "/post", { config: { detail: { publishedAtSelector, publishedAtAuthoritative: true, publishedAtUtcOffset: "+00:00" } } } as never, { date: true, title: false, summary: false });

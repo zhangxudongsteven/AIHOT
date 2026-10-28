@@ -33,9 +33,10 @@ const MIN_BODY_CHARS = 200;
 
 /**
  * Paths that serve a sign-in form rather than the page that was asked for. A path segment, never a
- * substring: "/auth-for-agents" and "/authors/x" are ordinary pages.
+ * substring, with an optional page extension: Devise uses "/users/sign_in", WordPress "/wp-login.php".
+ * "/auth-for-agents", "/authors/x" and "/login.php-guide" are ordinary pages.
  */
-const AUTH_PATH = /(?:^|\/)(?:login|log-in|signin|sign-in|register|signup|sign-up|authorize|oauth2?|sso|auth)(?:\/|$)/i;
+const AUTH_PATH = /(?:^|\/)(?:login|log-in|log_in|signin|sign-in|sign_in|register|signup|sign-up|sign_up|authorize|oauth2?|sso|auth|wp-login)(?:\.(?:php|aspx?|html?|jsp))?(?:\/|$)/i;
 
 /** Whether an address is a sign-in form's own path (a listing's "Log in" link is no post either). */
 export function isSignInUrl(url: string): boolean {

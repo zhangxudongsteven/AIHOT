@@ -22,6 +22,14 @@ import { noiseFiltered } from "@aihot/backend/sources/filters";
 
 const source = (config: Record<string, unknown>) => ({ id: "test-list", config }) as never;
 
+test("listing links to common sign-in forms are skipped without dropping ordinary auth-related pages", () => {
+  const forms = ["/users/sign_in", "/users/sign_up", "/wp-login.php", "/member/login.php", "/en/register.html"];
+  const posts = ["/authorized-retailer", "/authors", "/sso-products", "/login.company", "/login.php-guide", "/auth.html5"];
+  const html = [...forms, ...posts].map((path) => `<article><a href="${path}">A page at ${path}</a></article>`).join("");
+  const items = fromHtml(html, "https://example.org", source({ url: "https://example.org", itemSelector: "article" }));
+  assert.deepEqual(items.map((item) => item.url), posts.map((path) => `https://example.org${path}`));
+});
+
 const KEV_PATH = "/sites/default/files/feeds/known_exploited_vulnerabilities.json";
 const kevEntry = {
   cveID: "CVE-2026-12345", vendorProject: "Example Vendor", product: "Example Gateway",
