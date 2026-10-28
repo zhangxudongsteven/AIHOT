@@ -21,6 +21,7 @@ const challenge = "example.org Performing security verification This website use
 const prose = "A real report explains why a service returned 404 and how CAPTCHA verification affects its users. ".repeat(8);
 const html = (title: string, text: string) => `<html><head><title>${title}</title><meta name="description" content="False description"></head><body><article><h1>${title}</h1><p>${text}</p><a href="/news/post">Navigation item</a></article></body></html>`;
 const signInPage = html("Sign in to Example", "Sign in to your account. Enter your email address and password to continue. ".repeat(6));
+const signInPaths = ["/login", "/users/sign_in", "/wp-login.php", "/member/login.php", "/en/register.html"];
 const autofill = "A real report explains how password managers fill a sign-in form and why autofill is safer than typing. ".repeat(4);
 let readerHits = 0;
 const readerPages: Record<string, string> = {
@@ -33,6 +34,7 @@ const readerPages: Record<string, string> = {
 const server = http.createServer((req, res) => {
   // The redirect has to answer before the default headers: a source URL the site sends to its sign-in form.
   if (req.url === "/redirect") { res.writeHead(302, { location: "/login" }); return void res.end(); }
+  if (req.url?.startsWith("/redirect/")) { res.writeHead(302, { location: signInPaths[Number(req.url.slice("/redirect/".length))]! }); return void res.end(); }
   if (req.url === "/brand/register") { res.writeHead(301, { location: "/brand/register/" }); return void res.end(); }
   res.writeHead(200, { "content-type": req.url?.startsWith("/reader/") ? "text/plain" : "text/html", "x-usage-tokens": "100" });
   if (req.url?.startsWith("/reader/")) {
@@ -41,7 +43,7 @@ const server = http.createServer((req, res) => {
   }
   // The form itself is long enough to be mistaken for a body by the length and density checks.
   if (req.url === "/article") return void res.end(html("Password autofill in browsers", autofill));
-  if (req.url === "/login") return void res.end(signInPage);
+  if (signInPaths.includes(req.url ?? "")) return void res.end(signInPage);
   if (req.url === "/brand/register/") return void res.end(html("The certified products register", prose));
   if (req.url === "/listing") return void res.end(`<html><body>
     <article><a href="/article">Password autofill in browsers</a></article>
@@ -104,6 +106,9 @@ test("a redirect to a sign-in form cannot become the body", async () => {
   // Without the redirect check this page is accepted: it is long enough and reads like an article.
   assert.ok(readable(signInPage, `${base}/login`), "the sign-in form passes the body checks — that is the trap");
   assert.equal(await extractFromUrl(`${base}/redirect`, `article:${T}:signin`, {}, { paidFallback: false }), null);
+  for (const [index, path] of signInPaths.entries()) {
+    assert.equal(await extractFromUrl(`${base}/redirect/${index}`, `article:${T}:signin:${index}`, {}, { paidFallback: false }), null, path);
+  }
   // An article that merely mentions signing in and passwords is still an article.
   const got = await extractFromUrl(`${base}/article`, `article:${T}:autofill`, {}, { paidFallback: false });
   assert.ok(got?.text.includes("password managers"), "text about sign-in forms is not a sign-in redirect");
