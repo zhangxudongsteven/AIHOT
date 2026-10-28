@@ -88,6 +88,9 @@ command -v docker > /dev/null || fail 'Docker with the Compose plugin is require
 compose() {
   env -u DATABASE_URL -u PGPASSWORD -u DATABASE_POOL_MAX -u SITE_URL -u PORT \
     -u ADMIN_PASSWORD -u SESSION_SECRET -u IMG_PROXY_SIGN_SECRET -u AIHOT_RELEASE -u LOG_LEVEL \
+    -u LLM_BASE_URL -u LLM_API_KEY -u LLM_MODEL -u LLM_VISION -u MODEL_CALLS_ENABLED \
+    -u COLLECT_ENABLED -u FEISHU_CONTENT_PUSH_ENABLED \
+    -u FEISHU_PUSH_WEBHOOK_URL -u FEISHU_SECURITY_WEBHOOK_URL \
     -u COMPOSE_FILE -u COMPOSE_PROJECT_NAME -u COMPOSE_PROFILES -u COMPOSE_ENV_FILES \
     -u COMPOSE_DISABLE_ENV_FILE \
     docker compose --project-directory "$root" --project-name myhot-lan \
@@ -141,14 +144,17 @@ try {
   if (!Number.isInteger(pool) || pool < 2) throw new Error('DATABASE_POOL_MAX must be an integer of at least 2.');
   if (!config.adminPassword || config.adminPassword.length < 12) throw new Error('ADMIN_PASSWORD must contain at least 12 characters.');
   assertProductionSecrets([['auth', 'SESSION_SECRET'], ['auth', 'IMG_PROXY_SIGN_SECRET'], ...DEPLOYMENT.requiredSecrets]);
-  for (const name of ['COLLECT_ENABLED', 'MODEL_CALLS_ENABLED', 'FEISHU_CONTENT_PUSH_ENABLED', 'FEISHU_INTERNAL_ENABLED', 'INDEXNOW_SUBMIT_ENABLED']) {
+  for (const name of ['FEISHU_INTERNAL_ENABLED', 'INDEXNOW_SUBMIT_ENABLED']) {
     if (process.env[name] !== 'false') throw new Error(`${name} must remain false for LAN debugging.`);
+  }
+  for (const name of ['MODEL_CALLS_ENABLED', 'COLLECT_ENABLED', 'FEISHU_CONTENT_PUSH_ENABLED']) {
+    if (!['true', 'false'].includes(process.env[name] ?? 'false')) throw new Error(`${name} must be true or false.`);
   }
   const origin = new URL(config.siteUrl);
   if (!['http:', 'https:'].includes(origin.protocol) || origin.username || origin.password || origin.pathname !== '/' || origin.search || origin.hash) {
     throw new Error('SITE_URL must be an HTTP(S) origin without credentials, path, query or fragment.');
   }
-  console.log('Environment validation passed; external actions remain disabled.');
+  console.log(`Environment validation passed; internal Feishu and IndexNow remain disabled. Model calls: ${process.env.MODEL_CALLS_ENABLED ?? 'false'}; collection: ${process.env.COLLECT_ENABLED ?? 'false'}; content push: ${process.env.FEISHU_CONTENT_PUSH_ENABLED ?? 'false'}.`);
 } catch (error) {
   // Validation errors above contain field names only, never their values.
   console.error(error.message);

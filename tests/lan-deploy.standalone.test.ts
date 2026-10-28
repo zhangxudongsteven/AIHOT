@@ -36,7 +36,7 @@ else {
 }
 if (!stage) throw new Error("Unexpected Docker command: " + JSON.stringify(args));
 const inherited = {};
-for (const key of ["DATABASE_URL", "PGPASSWORD", "SITE_URL", "PORT", "DATABASE_POOL_MAX", "ADMIN_PASSWORD", "SESSION_SECRET", "IMG_PROXY_SIGN_SECRET", "AIHOT_RELEASE", "LOG_LEVEL", "COMPOSE_FILE", "COMPOSE_PROJECT_NAME", "COMPOSE_PROFILES", "COMPOSE_ENV_FILES"]) {
+for (const key of ["DATABASE_URL", "PGPASSWORD", "SITE_URL", "PORT", "DATABASE_POOL_MAX", "ADMIN_PASSWORD", "SESSION_SECRET", "IMG_PROXY_SIGN_SECRET", "AIHOT_RELEASE", "LOG_LEVEL", "LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL", "LLM_VISION", "MODEL_CALLS_ENABLED", "COLLECT_ENABLED", "FEISHU_CONTENT_PUSH_ENABLED", "FEISHU_PUSH_WEBHOOK_URL", "FEISHU_SECURITY_WEBHOOK_URL", "COMPOSE_FILE", "COMPOSE_PROJECT_NAME", "COMPOSE_PROFILES", "COMPOSE_ENV_FILES"]) {
   if (process.env[key] !== undefined) inherited[key] = true;
 }
 fs.appendFileSync(process.env.LAN_TEST_TRACE, JSON.stringify({ stage, args, envFile, inherited }) + "\\n");
@@ -108,7 +108,7 @@ test("missing or publicly readable environment files and unknown modes fail befo
 
 test("check selects the explicit environment and ignores stale shell connection and Compose settings", () => {
   const { envFile, run } = fixture();
-  const stale = Object.fromEntries(["DATABASE_URL", "PGPASSWORD", "SITE_URL", "PORT", "DATABASE_POOL_MAX", "ADMIN_PASSWORD", "SESSION_SECRET", "IMG_PROXY_SIGN_SECRET", "AIHOT_RELEASE", "LOG_LEVEL", "COMPOSE_FILE", "COMPOSE_PROJECT_NAME", "COMPOSE_PROFILES", "COMPOSE_ENV_FILES"].map((key) => [key, "stale-shell-value"]));
+  const stale = Object.fromEntries(["DATABASE_URL", "PGPASSWORD", "SITE_URL", "PORT", "DATABASE_POOL_MAX", "ADMIN_PASSWORD", "SESSION_SECRET", "IMG_PROXY_SIGN_SECRET", "AIHOT_RELEASE", "LOG_LEVEL", "LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL", "LLM_VISION", "MODEL_CALLS_ENABLED", "COLLECT_ENABLED", "FEISHU_CONTENT_PUSH_ENABLED", "FEISHU_PUSH_WEBHOOK_URL", "FEISHU_SECURITY_WEBHOOK_URL", "COMPOSE_FILE", "COMPOSE_PROJECT_NAME", "COMPOSE_PROFILES", "COMPOSE_ENV_FILES"].map((key) => [key, "stale-shell-value"]));
   const result = run("check", stale);
   assert.equal(result.status, 0, result.stderr);
   assert.ok(result.calls.some((call) => call.stage === "config"));

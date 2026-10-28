@@ -32,7 +32,9 @@ chmod 600 .env.lan
 | `SESSION_SECRET` / `IMG_PROXY_SIGN_SECRET` | 两项独立签名密钥 |
 | `AIHOT_RELEASE` | 部署标识，同时用于镜像标签；填写可定位到源码的版本名 |
 
-后端仅接收 Compose 白名单中的环境变量，Web 不接收数据库或管理员密钥。采集、模型、飞书内部消息、内容推送和 IndexNow 的开关在 Compose 中固定为 `false`；修改 `.env.lan` 或终端的同名变量不会开启它们。开发免登录、模型与采集服务密钥、飞书凭证和备份云存储凭证均不传入容器。开启真实业务另行变更配置并验证。
+后端仅接收 Compose 白名单中的环境变量，Web 不接收数据库、管理员、模型或飞书密钥。模型配置使用 `LLM_BASE_URL`、`LLM_API_KEY`、`LLM_MODEL`、`LLM_VISION`，已有频道还需同步活动模型配置快照。采集、模型调用和内容推送默认关闭，完成对应验证后，可在私有环境文件显式设置 `COLLECT_ENABLED=true`、`MODEL_CALLS_ENABLED=true`、`FEISHU_CONTENT_PUSH_ENABLED=true` 并重建 API/worker。内容推送另需 `FEISHU_PUSH_WEBHOOK_URL` 及启用的频道通知目标；T2 信源与首次历史导入不会自动推送精选。已有待处理内容可能由定时任务调用模型。飞书内部消息和 IndexNow 仍固定关闭；开发免登录、付费采集服务密钥、飞书自建应用凭证和备份云存储凭证均不传入容器。
+
+安全频道通知目标使用独立的 `configRef: "FEISHU_SECURITY_WEBHOOK_URL"`，默认频道仍用 `FEISHU_PUSH_WEBHOOK_URL`。两个频道发往同一群时，在私有环境文件中为两个变量配置同一 webhook；引用名称分别保留，通知订阅和投递记录仍按频道隔离。该变量只传入后端，Web 不接收。
 
 ## 部署与更新
 
