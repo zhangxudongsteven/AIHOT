@@ -247,8 +247,9 @@ test("admin article diagnostics and both source previews retain date precision a
   };
   const api = fakeApi((url) => {
     if (url.pathname === "/api/admin/me") return { name: "Fixture admin", csrf: "fixture", dev: true };
+    if (url.pathname === "/api/admin/spaces") return { spaces: [{ id: "default", slug: "default", name: "AI", enabled: true, failedSources: 0 }] };
     if (url.pathname === "/api/admin/nav-counts") return {};
-    if (url.pathname === "/api/admin/sources/date-source") return { source, runs: [], items: [], stats: { total: 0, last7d: 0, selected: 0 }, history: [], republish: null };
+    if (url.pathname === "/api/admin/spaces/default/sources/date-source") return { source, runs: [], items: [], stats: { total: 0, last7d: 0, selected: 0 }, history: [], republish: null };
     if (url.pathname.endsWith("/preview")) return { ms: 1, count: 2, items: [
       { title: "仅日期预览", url: "https://example.org/day", publishedAt: midnight, publicationTime: "2026-10-04", excerpt: "日期摘要" },
       { title: "准确零点预览", url: "https://example.org/exact", publishedAt: midnight, publicationTime: midnight, excerpt: "时刻摘要" },
@@ -256,7 +257,7 @@ test("admin article diagnostics and both source previews retain date precision a
     if (url.pathname.startsWith("/api/admin/content/")) {
       const id = url.pathname.split("/").at(-1)!;
       return {
-        article: { id, source_id: source.id, source_name: source.name, source_kind: "rss", tier: "T1", participation_mode: "editorial",
+        article: { id, source_id: source.id, space_id: "default", source_name: source.name, source_kind: "rss", tier: "T1", participation_mode: "editorial",
           title: "日期诊断", url: `https://example.org/${id}`, identity_key: id, author: null, language: "en", published_at: midnight,
           publication_time: id === "exact" ? midnight : "2026-10-04", published_at_claim: midnight, discovered_at: "2026-10-04T09:35:00.000Z",
           timeline_at: id === "collected" ? "2026-10-04T09:35:00.000Z" : midnight, backfill: id !== "collected", body_status: "ok",

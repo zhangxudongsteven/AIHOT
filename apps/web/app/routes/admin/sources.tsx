@@ -3,28 +3,31 @@ import { Form, Link, useNavigate, useSearchParams } from "react-router";
 import type { Route } from "./+types/sources";
 import type { AdminSources } from "@aihot/contracts/admin";
 import { adminGet } from "../../lib/admin.server";
+import { adminChannelApi } from "../../lib/admin-channel";
+import { useAdminSpace } from "../../features/admin/channel";
 import { num } from "../../features/admin/format";
 import { HEALTH_LABEL, KIND_LABEL, MODE_LABEL } from "../../features/admin/labels";
 import { AdminPage, Badge, ButtonLink, Card, DataTable, Dot, FilterChips, healthTone, Input, Pager, Select, Stat, Time } from "../../features/admin/ui";
 
 
 
-export async function loader({ request }: Route.LoaderArgs) {
+export async function loader({ request, params }: Route.LoaderArgs) {
   const url = new URL(request.url);
-  return adminGet<AdminSources>(request, `/api/admin/sources${url.search}`);
+  return adminGet<AdminSources>(request, adminChannelApi(params.spaceId!, `/sources${url.search}`));
 }
 
 export const meta: Route.MetaFunction = () => [{ title: `信源 · ${SITE.name} 后台` }];
 
 export default function Sources({ loaderData }: Route.ComponentProps) {
   const { rows, totals, page } = loaderData;
+  const { path } = useAdminSpace();
   const [sp] = useSearchParams();
   const navigate = useNavigate();
   return (
     <AdminPage
       title="信源"
       subtitle="列表按健康度排序：失败的在最前。点进详情可以预览抓取、手动采集、调整频率与参与方式。"
-      actions={<ButtonLink to="/admin/sources/new" tone="primary">新建信源</ButtonLink>}
+      actions={<ButtonLink to={path("/sources/new")} tone="primary">新建信源</ButtonLink>}
     >
       <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-4">
         <Stat label="全部" value={num(totals.total)} />
@@ -62,14 +65,14 @@ export default function Sources({ loaderData }: Route.ComponentProps) {
         <DataTable
           rows={rows}
           rowKey={(r) => r.id}
-          onRowClick={(r) => navigate(`/admin/sources/${encodeURIComponent(r.id)}`)}
+          onRowClick={(r) => navigate(path(`/sources/${encodeURIComponent(r.id)}`))}
           columns={[
             {
               key: "name",
               label: "信源",
               render: (r) => (
                 <div className="min-w-[220px]">
-                  <Link to={`/admin/sources/${encodeURIComponent(r.id)}`} className="font-medium text-ink hover:text-accent" onClick={(e) => e.stopPropagation()}>
+                  <Link to={path(`/sources/${encodeURIComponent(r.id)}`)} className="font-medium text-ink hover:text-accent" onClick={(e) => e.stopPropagation()}>
                     {r.name}
                   </Link>
                   <div className="font-mono text-[11.5px] text-ink-4">{r.id}</div>

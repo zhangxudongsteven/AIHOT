@@ -65,7 +65,29 @@ AI 来源也可用同样的 `plan/apply/list --space default` 准备。`apply` �
 | GET / PATCH | `/api/admin/spaces/:spaceId/sources/:id` |
 | POST | `/api/admin/spaces/:spaceId/sources/:id/preview`、`.../:id/fetch` |
 
-异频道来源返回 404，不因全局 ID 能猜到就跨频道读取。完整后台频道表单仍未实现，当前通过 API 和 CLI 管理。
+异频道来源返回 404，不因全局 ID 能猜到就跨频道读取。
+
+## 后台频道管理
+
+后台“管理范围”可选择平台、AI 或网络安全。频道归属由 URL 固定，两个浏览器标签页可以分别管理不同频道；切换未保存的表单时会询问是否放弃修改。
+
+| 页面 | AI | 网络安全 |
+| --- | --- | --- |
+| 信源 | `/admin/channels/default/sources` | `/admin/channels/security/sources` |
+| 模型请求额度 | `/admin/channels/default/quotas` | `/admin/channels/security/quotas` |
+| 飞书内容推送 | `/admin/channels/default/notifications` | `/admin/channels/security/notifications` |
+
+旧 `/admin/sources` 地址及其详情、新建入口固定跳转至 AI。信源新建、编辑、预览与手工采集均沿用所属频道的校验；停用频道可以准备配置，预览和采集仍受既有限制。切换不会自动启用频道或改变环境外发开关。
+
+模型额度以实际请求 attempt 计数，失败、重试和回退也计入。窗口为滚动一分钟、一小时和 24 小时；频道上限与平台总上限同时生效。未设置频道额度表示不增加频道限制，数值 0 表示暂停该服务；保存普通上限会保留已有预留容量。该页面不修改模型供应商、模型选择或 API Key。
+
+飞书目标按频道分别配置“精选”和“报告”订阅，报告包含日报、周报及月报。启用或改变路由/订阅仅作用于后续符合条件的内容，不补推历史文章。实际发送还须频道启用、目标启用、凭据已配置及环境推送总开关开启。
+
+群目录在 `DEPLOYMENT.contentPushGroups` 登记非密钥的群标识、显示名和凭据引用。AI 使用自己的既有引用，安全使用自己的既有引用，即使实际指向同一群也不合并。网页只得到群标识和配置状态，不读取或保存 Webhook；更换实际地址仍通过私有部署凭据完成。未登记的旧目标保留并可停用，登记后才可在网页重新开启或编辑。
+
+新增 `GET /api/admin/spaces` 提供受认证的管理频道目录，既有 scoped settings 返回频道、额度、群目录及环境状态。网页通过 `PUT /api/admin/spaces/:spaceId/content-subscription` 保存 `targetName/groupId/enabled/subjectKinds/reason`，不接受自由凭据名或 Webhook。旧管理 API 和 CLI 保持兼容；全部写入继续检查 CSRF 并记录审计。
+
+`/admin/settings` 保留平台二维码、运维通知与平台总额度。内容诊断、运行、反馈及审计仍为全站范围；模型页面仍是默认 AI 模型配置与全站用量，SelectBench 仅支持 AI。功能实现、Staging 验收和生产部署状态分别记录，新增入口本身不会修改既有运营配置。
 
 ## 分频道评测
 

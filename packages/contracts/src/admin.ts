@@ -209,7 +209,7 @@ export interface AdminPublication {
 /** An item's whole chain: source → discoveries → revisions → judgements → publication → grouping → deliveries. */
 export interface AdminContentChain {
   article: {
-    id: string; source_id: string; url: string; identity_key: string; title: string; author: string | null; language: string | null;
+    id: string; source_id: string; space_id: string; url: string; identity_key: string; title: string; author: string | null; language: string | null;
     published_at: Timestamp | null; publication_time?: string | null; published_at_claim: string | null; discovered_at: Timestamp; timeline_at: Timestamp; backfill: boolean;
     body_status: string; revision: number; processing_state: string; processing_error: string | null; grouped_at: Timestamp | null; body_chars: number | null;
     source_name: string; source_kind: string; tier: string; participation_mode: string; site_fulltext: boolean; syndicate_fulltext: boolean;
@@ -311,6 +311,66 @@ export interface AdminRuns {
 }
 
 // Settings
+
+export interface AdminSpace {
+  id: string;
+  slug: string;
+  name: string;
+  enabled: boolean;
+  failedSources: number;
+  /** Retained on scoped settings for existing API clients. */
+  active_config_version?: string | null;
+}
+
+export interface AdminSpaces { spaces: AdminSpace[] }
+
+export interface AdminPushGroup {
+  id: string;
+  label: string;
+  /** A credential exists; this does not test connectivity or enable sending. */
+  configured: boolean;
+}
+
+export interface AdminSpaceNotifyTarget extends AdminNotifyTarget {
+  targetName: string | null;
+  groupId: string | null;
+}
+
+export interface AdminSpaceBudget extends AdminBudget {
+  space_id: string;
+  reserved_minute: number;
+  reserved_hour: number;
+  reserved_day: number;
+  used_minute: number;
+}
+
+export interface AdminSpaceBudgetInput {
+  perMinute: number;
+  perHour: number;
+  perDay: number;
+  reservedMinute?: number;
+  reservedHour?: number;
+  reservedDay?: number;
+  reason: string;
+}
+
+export interface AdminContentSubscriptionInput {
+  targetName: string;
+  /** Null only pauses an existing target while preserving its operator-managed routing. */
+  groupId: string | null;
+  enabled: boolean;
+  subjectKinds: Array<"selected" | "report">;
+  reason: string;
+}
+
+export interface AdminSpaceSettings {
+  space: AdminSpace;
+  targets: AdminSpaceNotifyTarget[];
+  budgets: AdminSpaceBudget[];
+  platformBudgets: AdminBudget[];
+  pushGroups: AdminPushGroup[];
+  gates: { collectEnabled: boolean; modelCallsEnabled: boolean; contentPushEnabled: boolean };
+}
 
 export interface AdminNotifyTarget {
   key: string;

@@ -4,7 +4,9 @@ import { Link } from "react-router";
 import type { Route } from "./+types/source";
 import { REPLACEABLE_SOURCE_KINDS, type AdminSource, type AdminSourceDetail, type AdminSourcePreview, type AdminSourceUpdate } from "@aihot/contracts/admin";
 import { adminGet } from "../../lib/admin.server";
+import { adminChannelApi } from "../../lib/admin-channel";
 import { useAdminAction } from "../../features/admin/action";
+import { useAdminDirty, useAdminSpace } from "../../features/admin/channel";
 import { bj, duration, num } from "../../features/admin/format";
 import { fullDateTime, publicationValue } from "../../lib/format";
 import { HEALTH_LABEL, KIND_LABEL, MODE_LABEL, TIER_LABEL, VISIBILITY_LABEL } from "../../features/admin/labels";
@@ -16,7 +18,7 @@ import { AdminPage, Badge, Button, Card, DataTable, Dot, Empty, Field, healthTon
 
 
 export async function loader({ request, params }: Route.LoaderArgs) {
-  return adminGet<AdminSourceDetail>(request, `/api/admin/sources/${encodeURIComponent(params.id)}`);
+  return adminGet<AdminSourceDetail>(request, adminChannelApi(params.spaceId!, `/sources/${encodeURIComponent(params.id)}`));
 }
 
 export const meta: Route.MetaFunction = ({ loaderData }) => [{ title: `${loaderData?.source.name ?? "信源"} · ${SITE.name} 后台` }];
@@ -42,18 +44,23 @@ function draftOf(s: AdminSource): Draft {
 
 export default function SourceDetail({ loaderData }: Route.ComponentProps) {
   const { source: s, runs, items, stats, history } = loaderData;
+  const { space, spaceId, api } = useAdminSpace();
   const { run, pending } = useAdminAction();
   const [draft, setDraft] = useState<Draft>(() => draftOf(s));
-  const [draftFor, setDraftFor] = useState(s.updated_at);
+  const identity = `${spaceId}:${s.id}:${s.updated_at}`;
+  const [draftFor, setDraftFor] = useState(identity);
   const [preview, setPreview] = useState<AdminSourcePreview | null>(null);
   const [dialog, setDialog] = useState<null | "save" | "toggle">(null);
   const [configError, setConfigError] = useState<string | null>(null);
-  if (draftFor !== s.updated_at) {
+  if (draftFor !== identity) {
     // The source changed (our own save or someone else's): start from the saved state.
     setDraft(draftOf(s));
-    setDraftFor(s.updated_at);
+    setDraftFor(identity);
+    setPreview(null);
+    setConfigError(null);
+    setDialog(null);
   }
-  const base = `/api/admin/sources/${encodeURIComponent(s.id)}`;
+  const base = api(`/sources/${encodeURIComponent(s.id)}`);
 
   const patch = (): AdminSourceUpdate["patch"] | null => {
     let config: unknown;
@@ -88,6 +95,7 @@ export default function SourceDetail({ loaderData }: Route.ComponentProps) {
       return 1;
     }
   })();
+  useAdminDirty(changes > 0);
 
   return (
     <AdminPage
@@ -102,19 +110,20 @@ export default function SourceDetail({ loaderData }: Route.ComponentProps) {
       actions={
         <>
           <Button
+            disabled={!space.enabled}
             busy={pending === "preview"}
             onClick={async () => {
               const p = patch();
               if (!p) return;
               const r = changes && (REPLACEABLE_SOURCE_KINDS as readonly string[]).includes(draft.kind)
-                ? await run<AdminSourcePreview>("POST", "/api/admin/sources/preview", { id: s.id, kind: draft.kind, config: p.config ?? s.config, participation_mode: draft.participation_mode }, { label: "preview", revalidate: false })
+                ? await run<AdminSourcePreview>("POST", api("/sources/preview"), { id: s.id, kind: draft.kind, config: p.config ?? s.config, participation_mode: draft.participation_mode }, { label: "preview", revalidate: false })
                 : await run<AdminSourcePreview>("POST", `${base}/preview`, undefined, { label: "preview", revalidate: false });
               if (r) setPreview(r);
             }}
           >
             预览当前配置
           </Button>
-          <Button busy={pending === "fetch"} onClick={() => run("POST", `${base}/fetch`, undefined, { label: "fetch", success: "已加入采集队列" })}>
+          <Button disabled={!space.enabled} busy={pending === "fetch"} onClick={() => run("POST", `${base}/fetch`, undefined, { label: "fetch", success: "已加入采集队列" })}>
             立即采集
           </Button>
           <Button tone={s.enabled ? "danger" : "primary"} onClick={() => setDialog("toggle")}>

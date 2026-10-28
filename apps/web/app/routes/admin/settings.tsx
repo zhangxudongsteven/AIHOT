@@ -13,7 +13,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   return adminGet<AdminSettings>(request, "/api/admin/settings");
 }
 
-export const meta: Route.MetaFunction = () => [{ title: `设置 · ${SITE.name} 后台` }];
+export const meta: Route.MetaFunction = () => [{ title: `平台设置 · ${SITE.name} 后台` }];
 
 function QrSlot({ slot, label, src }: { slot: "wechatQr" | "feishuQr"; label: string; src: string | null }) {
   const { run, pending } = useAdminAction();
@@ -101,7 +101,7 @@ function TargetToggle({ t }: { t: AdminSettings["targets"][number] }) {
 
 export default function SettingsAdmin({ loaderData: s }: Route.ComponentProps) {
   return (
-    <AdminPage title="设置" subtitle="不改代码即可替换的运营设置。每次修改都写入审计记录。">
+    <AdminPage title="平台设置" subtitle="全站共享二维码、运维通知和平台总额度。频道信源、模型额度及内容推送请在管理范围中选择 AI 或网络安全。">
       <div className="grid gap-5 xl:grid-cols-2">
         <Card title="关于页二维码">
           <div className="space-y-5">
@@ -109,9 +109,9 @@ export default function SettingsAdmin({ loaderData: s }: Route.ComponentProps) {
             <QrSlot slot="feishuQr" label="飞书群二维码" src={s.contact.feishuQr} />
           </div>
         </Card>
-        <Card title="通知目的地" pad={false}>
+        <Card title="平台运维通知" pad={false}>
           <DataTable
-            rows={s.targets}
+            rows={s.targets.filter(t => t.purpose !== "content")}
             rowKey={(t) => t.key}
             columns={[
               { key: "k", label: "目的地", render: (t) => <div><div className="font-medium text-ink">{t.note ?? t.key}</div><div className="font-mono text-[11.5px] text-ink-4">{t.space_id} · {t.subject_kinds.join(" / ")} · {t.config_ref}</div></div> },
@@ -122,7 +122,7 @@ export default function SettingsAdmin({ loaderData: s }: Route.ComponentProps) {
           />
         </Card>
       </div>
-      <Card className="mt-5" title="付费请求上限" right={<span>已用：近 1 小时 / 近 24 小时</span>} pad={false}>
+      <Card className="mt-5" title="平台总请求上限" right={<span>全站已用：近 1 小时 / 近 24 小时</span>} pad={false}>
         <div className="overflow-x-auto">
           <table className="w-full min-w-[640px] text-[13px]">
             <thead>

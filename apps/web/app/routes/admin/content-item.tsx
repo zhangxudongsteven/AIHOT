@@ -5,6 +5,9 @@ import { CATEGORY_KEYS, CATEGORY_LABELS } from "@aihot/contracts/taxonomy";
 import type { Route } from "./+types/content-item";
 import type { AdminContentChain, AdminPresentationRefresh } from "@aihot/contracts/admin";
 import { adminGet } from "../../lib/admin.server";
+import { adminChannelPath } from "../../lib/admin-channel";
+import { spacePath } from "../../lib/space-path";
+import { useAdminSpaces } from "../../features/admin/channel";
 import { useAdminAction } from "../../features/admin/action";
 import { bj, money } from "../../features/admin/format";
 import { fullDateTime, publicationValue, timelineValue } from "../../lib/format";
@@ -38,6 +41,9 @@ type Dialog = null | "visibility" | "seo" | "override" | "analyze" | "extract" |
 export default function ContentItem({ loaderData }: Route.ComponentProps) {
   const c = loaderData;
   const a = c.article;
+  const space = useAdminSpaces().find((entry) => entry.id === a.space_id);
+  const sourcePath = space ? adminChannelPath(space.id, `/sources/${encodeURIComponent(a.source_id)}`) : null;
+  const publicPath = (path: string) => space?.id === "default" ? path : space ? spacePath(path, space.slug) : null;
   const p = c.publication;
   const { run, pending } = useAdminAction();
   const [dialog, setDialog] = useState<Dialog>(null);
@@ -73,13 +79,13 @@ export default function ContentItem({ loaderData }: Route.ComponentProps) {
         <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <span className="font-mono text-[12px]">{a.id}</span>
           <span>·</span>
-          <Link className="hover:text-accent" to={`/admin/sources/${encodeURIComponent(a.source_id)}`}>{a.source_name}</Link>
+          {sourcePath ? <Link className="hover:text-accent" to={sourcePath}>{a.source_name}</Link> : <span>{a.source_name}</span>}
           <span>·</span>
           <a className="max-w-[420px] truncate hover:text-accent" href={a.url} target="_blank" rel="noreferrer">{a.url}</a>
-          {p?.visibility !== "withdrawn" && p && (
+          {p?.visibility !== "withdrawn" && p && publicPath(`/items/${a.id}`) && (
             <>
               <span>·</span>
-              <a className="text-accent" href={`/items/${a.id}`} target="_blank" rel="noreferrer">公开页</a>
+              <a className="text-accent" href={publicPath(`/items/${a.id}`)!} target="_blank" rel="noreferrer">公开页</a>
             </>
           )}
         </span>
@@ -108,7 +114,7 @@ export default function ContentItem({ loaderData }: Route.ComponentProps) {
         <Card title="处理链路">
           <ol className="pt-1">
             <Step title="信源" meta={`${KIND_LABEL[a.source_kind] ?? a.source_kind} · ${String(a.tier).replace("_", ".")} · ${MODE_LABEL[a.participation_mode] ?? a.participation_mode}`}>
-              <Link className="text-ink hover:text-accent" to={`/admin/sources/${encodeURIComponent(a.source_id)}`}>{a.source_name}</Link>
+              {sourcePath ? <Link className="text-ink hover:text-accent" to={sourcePath}>{a.source_name}</Link> : <span>{a.source_name}</span>}
               <span className="text-ink-4"> · 站内全文 {a.site_fulltext ? "允许" : "不允许"} · 对外全文 {a.syndicate_fulltext ? "允许" : "不允许"}</span>
             </Step>
             <Step title="发现" meta={`${c.discoveries.length} 次`}>
@@ -224,7 +230,7 @@ export default function ContentItem({ loaderData }: Route.ComponentProps) {
                   </div>
                   {m.story_public_id && (
                     <div className="mt-0.5">
-                      事件 <a className="text-accent" href={`/story/${m.story_public_id}`} target="_blank" rel="noreferrer">{m.story_title}</a> <span className="font-mono text-[12px] text-ink-4">#{m.story_id}</span>
+                      事件 {publicPath(`/story/${m.story_public_id}`) ? <a className="text-accent" href={publicPath(`/story/${m.story_public_id}`)!} target="_blank" rel="noreferrer">{m.story_title}</a> : m.story_title} <span className="font-mono text-[12px] text-ink-4">#{m.story_id}</span>
                     </div>
                   )}
                 </div>

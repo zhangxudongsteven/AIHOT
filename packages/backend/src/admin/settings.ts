@@ -1,11 +1,12 @@
 // Operator settings: about-page QR codes (replaced without a release), notification targets
 // (switching a group on records enabled_at so older content is never back-filled) and per-service
 // request budgets (the circuit breaker paid calls check before sending).
-import type { AdminBudget, AdminNotifyTarget, AdminSettings, BeforeJson } from "@aihot/contracts/admin";
+import type { AdminBudget, AdminContentSubscriptionInput, AdminNotifyTarget, AdminPushGroup, AdminSettings, AdminSpaceNotifyTarget, BeforeJson } from "@aihot/contracts/admin";
+import { DEPLOYMENT } from "@aihot/site";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
-import { config } from "../config.ts";
+import { config, credential } from "../config.ts";
 import { sql } from "../db.ts";
 import { sha256 } from "../lib/ids.ts";
 import { loadContact, type ContactSettings } from "../site/contact.ts";
@@ -51,15 +52,66 @@ export async function listTargets(spaceId?: string): Promise<BeforeJson<AdminNot
     FROM notify_targets t WHERE (${spaceId ?? null}::text IS NULL OR t.space_id = ${spaceId ?? null}) ORDER BY t.space_id, t.purpose, t.key`;
 }
 
-export async function setTargetEnabled(key: string, enabled: boolean, reason: string, actor: string, spaceId = DEFAULT_SPACE_ID) {
+const contentBindings = (spaceId: string) => Object.hasOwn(DEPLOYMENT.contentPushGroups, spaceId) ? DEPLOYMENT.contentPushGroups[spaceId] : [];
+
+/** Only explicitly registered content-group references are inspected, never environment inventories. */
+export function contentPushGroups(spaceId: string): AdminPushGroup[] {
+  return contentBindings(spaceId).map(({ id, label, configRef }) => ({ id, label, configured: credential("integrations", configRef) !== null }));
+}
+
+export async function listSpaceTargets(spaceId: string): Promise<BeforeJson<AdminSpaceNotifyTarget>[]> {
+  return (await listTargets(spaceId)).map(target => {
+    const prefix = spaceId === DEFAULT_SPACE_ID ? "" : `space:${spaceId}:`;
+    const name = target.key.startsWith(prefix) ? target.key.slice(prefix.length) : "";
+    const content = target.purpose === "content";
+    return { ...target,
+      targetName: content && /^[a-zA-Z0-9_-]{1,80}$/.test(name) ? name : null,
+      groupId: content && target.kind === "feishu_webhook" ? contentBindings(spaceId).find(group => group.configRef === target.config_ref)?.id ?? null : null,
+    };
+  });
+}
+
+const ContentSubscriptionInput = z.object({
+  targetName: z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/),
+  groupId: z.string().min(1).nullable(),
+  enabled: z.boolean(),
+  subjectKinds: z.array(z.enum(["selected", "report"])).min(1),
+  reason: z.string().trim().min(1),
+}).strict();
+const invalidSetting = (message: string) => Object.assign(new Error(message), { statusCode: 400 });
+
+/** The webpage chooses a registered group ID; operator API/CLI credential references stay compatible. */
+export async function configureContentSubscription(spaceId: string, input: AdminContentSubscriptionInput, actor: string): Promise<BeforeJson<AdminSpaceNotifyTarget> | null> {
+  const value = ContentSubscriptionInput.parse(input);
+  const key = spaceId === DEFAULT_SPACE_ID ? value.targetName : `space:${spaceId}:${value.targetName}`;
+  const registeredWebhookRefs = contentBindings(spaceId).map(group => group.configRef);
+  if (value.groupId === null) {
+    if (value.enabled) throw invalidSetting("Choose a registered group before enabling content push");
+    if (!await setTargetEnabled(key, false, value.reason, actor, spaceId, { unregisteredWebhookRefs: registeredWebhookRefs })) return null;
+  } else {
+    const group = contentBindings(spaceId).find(group => group.id === value.groupId);
+    if (!group) throw invalidSetting("Group is not registered for this channel");
+    if (value.enabled && !credential("integrations", group.configRef)) throw invalidSetting("The group's webhook credential is not configured");
+    await configureContentTarget(spaceId, { name: value.targetName, kind: "feishu_webhook", configRef: group.configRef,
+      subjectKinds: value.subjectKinds, enabled: value.enabled, reason: value.reason }, actor,
+      { registeredWebhookRefs });
+  }
+  return (await listSpaceTargets(spaceId)).find(target => target.targetName === value.targetName) ?? null;
+}
+
+export async function setTargetEnabled(key: string, enabled: boolean, reason: string, actor: string, spaceId = DEFAULT_SPACE_ID, options: { unregisteredWebhookRefs?: readonly string[] } = {}) {
   if (!reason?.trim()) throw new Error("reason is required");
   return sql.begin(async tx => {
-    const [before] = await tx`SELECT enabled, enabled_at FROM notify_targets WHERE key = ${key} AND space_id = ${spaceId} FOR UPDATE`;
+    const [before] = await tx`SELECT enabled, enabled_at, purpose, kind, config_ref FROM notify_targets WHERE key = ${key} AND space_id = ${spaceId} FOR UPDATE`;
     if (!before) return null;
+    if (options.unregisteredWebhookRefs) {
+      if (enabled || before.purpose !== "content" || before.kind !== "feishu_webhook") throw invalidSetting("This target is managed by an operator");
+      if (before.config_ref !== null && options.unregisteredWebhookRefs.includes(before.config_ref)) throw invalidSetting("Use the target's registered group");
+    }
     const [after] = await tx<Pick<TargetRouting, "key" | "space_id" | "enabled" | "enabled_at">[]>`
       UPDATE notify_targets SET enabled = ${enabled}, enabled_at = CASE WHEN ${enabled} AND NOT enabled THEN now() ELSE enabled_at END, updated_at = now()
       WHERE key = ${key} AND space_id = ${spaceId} RETURNING key, space_id, enabled, enabled_at`;
-    await audit(actor, enabled ? "notify.enable" : "notify.disable", `notify-target:${key}`, reason, before, after, { db: tx });
+    await audit(actor, enabled ? "notify.enable" : "notify.disable", `notify-target:${key}`, reason, { enabled: before.enabled, enabled_at: before.enabled_at }, after, { db: tx });
     return { ...after!, pushEnabledHere: config.feishuContentPushEnabled };
   });
 }
@@ -73,14 +125,18 @@ const ContentTargetInput = z.object({
 }).strict();
 
 /** Credentials stay in the integrations secret store; the database holds only the reference name. */
-export async function configureContentTarget(spaceId: string, input: z.infer<typeof ContentTargetInput>, actor: string) {
+export async function configureContentTarget(spaceId: string, input: z.infer<typeof ContentTargetInput>, actor: string, options: { registeredWebhookRefs?: readonly string[] } = {}) {
   const value = ContentTargetInput.parse(input);
-  if (value.kind === "feishu_webhook" && value.enabled && !value.configRef) throw new Error("An enabled webhook target requires a credential reference");
-  if (spaceId !== DEFAULT_SPACE_ID && ["FEISHU_PUSH_WEBHOOK_URL", "FEISHU_PUSH_MIRROR_WEBHOOK_URL"].includes(value.configRef ?? "")) throw new Error("A channel must use its own credential reference");
+  if (value.kind === "feishu_webhook" && value.enabled && !value.configRef) throw invalidSetting("An enabled webhook target requires a credential reference");
+  if (spaceId !== DEFAULT_SPACE_ID && ["FEISHU_PUSH_WEBHOOK_URL", "FEISHU_PUSH_MIRROR_WEBHOOK_URL"].includes(value.configRef ?? "")) throw invalidSetting("A channel must use its own credential reference");
   const key = spaceId === DEFAULT_SPACE_ID ? value.name : `space:${spaceId}:${value.name}`;
   return sql.begin(async tx => {
     if (!(await tx`SELECT 1 FROM spaces WHERE id = ${spaceId}`).length) throw new Error(`Unknown space: ${spaceId}`);
     const [before] = await tx`SELECT * FROM notify_targets WHERE key = ${key} FOR UPDATE`;
+    if (before && options.registeredWebhookRefs) {
+      if (before.space_id !== spaceId || before.purpose !== "content" || before.kind !== "feishu_webhook") throw invalidSetting("This target is managed by an operator");
+      if (before.config_ref !== null && !options.registeredWebhookRefs.includes(before.config_ref)) throw invalidSetting("Register this target's existing reference before editing its subscription");
+    }
     if (before && (before.space_id !== spaceId || before.purpose !== "content")) throw new Error("Target belongs to a different space or purpose");
     const kinds = [...new Set(value.subjectKinds)].sort();
     const [after] = await tx<TargetRouting[]>`INSERT INTO notify_targets (key, space_id, purpose, kind, enabled, enabled_at, config_ref, subject_kinds, note)
@@ -90,8 +146,13 @@ export async function configureContentTarget(spaceId: string, input: z.infer<typ
           OR notify_targets.config_ref IS DISTINCT FROM EXCLUDED.config_ref OR notify_targets.subject_kinds IS DISTINCT FROM EXCLUDED.subject_kinds) THEN now() ELSE notify_targets.enabled_at END,
         config_ref = EXCLUDED.config_ref, subject_kinds = EXCLUDED.subject_kinds, note = EXCLUDED.note, updated_at = now()
       WHERE notify_targets.space_id = EXCLUDED.space_id AND notify_targets.purpose = 'content'
+        AND (${options.registeredWebhookRefs ?? null}::text[] IS NULL OR (notify_targets.kind = 'feishu_webhook'
+          AND (notify_targets.config_ref IS NULL OR notify_targets.config_ref = ANY(${options.registeredWebhookRefs ?? null}::text[]))))
       RETURNING key, space_id, kind, enabled, enabled_at, config_ref, subject_kinds`;
-    if (!after) throw new Error("Target belongs to a different space or purpose");
+    if (!after) {
+      if (options.registeredWebhookRefs) throw invalidSetting("The target's operator routing changed; reload before editing");
+      throw new Error("Target belongs to a different space or purpose");
+    }
     await audit(actor, "notify.configure", `space:${spaceId}:notify-target:${key}`, value.reason, before ?? null, after, { db: tx });
     return { ...after, pushEnabledHere: config.feishuContentPushEnabled };
   });

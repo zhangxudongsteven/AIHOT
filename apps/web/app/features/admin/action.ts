@@ -1,7 +1,7 @@
 // Client-side admin commands: same-origin fetch to /api/admin/* with the session's CSRF token, a
 // stable Idempotency-Key per submitted command, and a revalidation of the page's loaders on success.
-import { useCallback, useRef, useState } from "react";
-import { useRevalidator, useRouteLoaderData } from "react-router";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useLocation, useRevalidator, useRouteLoaderData } from "react-router";
 import type { AdminMe } from "@aihot/contracts/admin";
 import { toast } from "./toast";
 
@@ -18,9 +18,16 @@ function newKey() {
 
 export function useAdminAction() {
   const me = useAdminMe();
+  const location = useLocation();
+  const origin = `${location.key}:${location.pathname}${location.search}`;
+  const currentOrigin = useRef(origin);
+  currentOrigin.current = origin;
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const revalidator = useRevalidator();
   const [pending, setPending] = useState<string | null>(null);
   const keys = useRef(new Map<string, string>());
+  const sequence = useRef(0);
 
   const run = useCallback(
     async <T = unknown>(
@@ -30,9 +37,12 @@ export function useAdminAction() {
       opts: { success?: string; label?: string; revalidate?: boolean } = {},
     ): Promise<T | null> => {
       const label = opts.label ?? `${method} ${path}`;
+      const identity = JSON.stringify([origin, method, path, body]);
+      const request = ++sequence.current;
+      const current = () => mounted.current && currentOrigin.current === origin;
       // The same command retried after a failure keeps its key, so paid work is not repeated.
-      const key = keys.current.get(label) ?? newKey();
-      keys.current.set(label, key);
+      const key = keys.current.get(identity) ?? newKey();
+      keys.current.set(identity, key);
       setPending(label);
       try {
         const res = await fetch(path, {
@@ -43,25 +53,27 @@ export function useAdminAction() {
           body: body === undefined ? undefined : JSON.stringify(body),
         });
         if (res.status === 401) {
+          if (!current()) return null;
           window.location.href = `/api/auth/login?return=${encodeURIComponent(window.location.pathname + window.location.search)}`;
           return null;
         }
         const text = await res.text();
         const json = text ? JSON.parse(text) : null;
+        if (!current()) return null;
         if (!res.ok) throw new AdminError(json?.detail ?? `请求失败（${res.status}）`);
-        keys.current.delete(label);
+        keys.current.delete(identity);
         if (opts.success) toast(opts.success, "ok");
         if (opts.revalidate !== false) revalidator.revalidate();
         // null means failure to callers; an empty success (204) is an empty object.
         return (json ?? {}) as T;
       } catch (error) {
-        toast(error instanceof AdminError ? error.message : "网络错误，请稍后再试", "error");
+        if (current()) toast(error instanceof AdminError ? error.message : "网络错误，请稍后再试", "error");
         return null;
       } finally {
-        setPending(null);
+        if (mounted.current && request === sequence.current) setPending(null);
       }
     },
-    [me.csrf, revalidator],
+    [me.csrf, revalidator, origin],
   );
 
   return { run, pending, busy: pending !== null || revalidator.state === "loading" };
