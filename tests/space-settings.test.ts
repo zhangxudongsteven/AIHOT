@@ -44,6 +44,15 @@ async function channel(name?: string, id = `settings-${tag()}`) {
 const targetInput = (name = `group-${tag()}`) => ({ name, kind: 'feishu_webhook' as const, configRef: 'TEST_SPACE_WEBHOOK', subjectKinds: ['selected'] as Array<'selected'|'report'>, enabled: false, reason: 'configure channel group' });
 const targetState = async (key: string) => (await sql`SELECT space_id,kind,enabled,enabled_at::text AS enabled_at,config_ref,subject_kinds,updated_at::text AS updated_at FROM notify_targets WHERE key=${key}`)[0]!;
 const platformInput = (limit: number) => ({ perMinute: limit, perHour: limit, perDay: limit, reason: 'platform capacity' });
+async function waitForTargetLock(blocker: number) {
+  for (let i = 0; ; i++) {
+    const waiting = await sql`SELECT 1 FROM pg_stat_activity WHERE datname = current_database()
+      AND ${blocker} = ANY(pg_blocking_pids(pid)) AND query ILIKE '%notify_targets%'`;
+    if (waiting.length) return;
+    assert.ok(i < 500, 'the web request reached the target row held by the operator');
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+}
 
 test('admin channel discovery includes disabled channels and counts only their enabled failing sources', async () => {
   const [a, b] = await Promise.all([channel('AI fixture'), channel('Security fixture')]);
@@ -164,6 +173,86 @@ test('unregistered webhook routes stay operator-managed until their reference is
     payload: { targetName: name, groupId: 'main', enabled: false, subjectKinds: ['report'], reason: 'attempt to replace operator routing' } });
   assert.equal(response.statusCode, 400, response.body);
   assert.deepEqual(await targetState(name), before);
+});
+
+test('a web save cannot overwrite an operator route committed while the target row is locked', async () => {
+  const name = `concurrent-route-${tag()}`;
+  await configureContentTarget('default', { ...targetInput(name), configRef: 'FEISHU_PUSH_WEBHOOK_URL', enabled: true }, actor);
+  const headers = await adminHeaders();
+  const blocker = await sql.reserve();
+  await blocker`BEGIN`;
+  const [{ pid }] = await blocker<{ pid: number }[]>`SELECT pg_backend_pid() AS pid`;
+  await blocker`UPDATE notify_targets SET config_ref = 'OPERATOR_CONCURRENT_WEBHOOK', note = 'operator route' WHERE key = ${name}`;
+  const reason = `web-race-${tag()}`;
+  const pending = app.inject({ method: 'PUT', url: '/api/admin/spaces/default/content-subscription', headers,
+    payload: { targetName: name, groupId: 'main', enabled: false, subjectKinds: ['report'], reason } }).then(response => response);
+  try { await waitForTargetLock(pid); }
+  finally { await blocker`COMMIT`; blocker.release(); }
+  const response = await pending;
+  assert.equal(response.statusCode, 400, response.body);
+  const target = (await listTargets('default')).find(target => target.key === name)!;
+  assert.equal(target.config_ref, 'OPERATOR_CONCURRENT_WEBHOOK');
+  assert.equal(target.enabled, true);
+  assert.deepEqual(target.subject_kinds, ['selected']);
+  assert.equal((await sql`SELECT 1 FROM audit_log WHERE reason = ${reason}`).length, 0);
+  await configureContentTarget('default', { ...targetInput(name), configRef: 'FEISHU_PUSH_WEBHOOK_URL' }, actor);
+  assert.equal((await targetState(name)).config_ref, 'FEISHU_PUSH_WEBHOOK_URL', 'the operator API retains its explicit rerouting capability');
+});
+
+test('a web-created target cannot overwrite a concurrently inserted operator route', async () => {
+  const name = `concurrent-insert-${tag()}`;
+  const headers = await adminHeaders();
+  const blocker = await sql.reserve();
+  await blocker`BEGIN`;
+  const [{ pid }] = await blocker<{ pid: number }[]>`SELECT pg_backend_pid() AS pid`;
+  await blocker`INSERT INTO notify_targets (key, space_id, purpose, kind, enabled, config_ref)
+    VALUES (${name}, 'default', 'content', 'feishu_webhook', true, 'OPERATOR_INSERTED_WEBHOOK')`;
+  const reason = `web-insert-race-${tag()}`;
+  const pending = app.inject({ method: 'PUT', url: '/api/admin/spaces/default/content-subscription', headers,
+    payload: { targetName: name, groupId: 'main', enabled: false, subjectKinds: ['report'], reason } }).then(response => response);
+  try { await waitForTargetLock(pid); }
+  finally { await blocker`COMMIT`; blocker.release(); }
+  const response = await pending;
+  assert.equal(response.statusCode, 400, response.body);
+  const target = (await listTargets('default')).find(target => target.key === name)!;
+  assert.equal(target.config_ref, 'OPERATOR_INSERTED_WEBHOOK');
+  assert.equal(target.enabled, true);
+  assert.deepEqual(target.subject_kinds, ['selected']);
+  assert.equal((await sql`SELECT 1 FROM audit_log WHERE reason = ${reason}`).length, 0);
+});
+
+test('web pause rechecks target ownership and operator routing after waiting for a row lock', async t => {
+  const other = await channel();
+  const changes = [
+    { label: 'operations purpose', purpose: 'alert', kind: 'feishu_webhook', ref: 'OPERATOR_PAUSE_WEBHOOK', spaceId: 'default', status: 400 },
+    { label: 'operations kind', purpose: 'content', kind: 'log', ref: 'OPERATOR_PAUSE_WEBHOOK', spaceId: 'default', status: 400 },
+    { label: 'registered reference', purpose: 'content', kind: 'feishu_webhook', ref: 'FEISHU_PUSH_WEBHOOK_URL', spaceId: 'default', status: 400 },
+    { label: 'another channel', purpose: 'content', kind: 'feishu_webhook', ref: 'OPERATOR_PAUSE_WEBHOOK', spaceId: other.spaceId, status: 404 },
+  ];
+  for (const change of changes) await t.test(change.label, async () => {
+    const name = `concurrent-pause-${tag()}`;
+    await configureContentTarget('default', { ...targetInput(name), configRef: 'OPERATOR_PAUSE_WEBHOOK', enabled: true }, actor);
+    const headers = await adminHeaders();
+    const blocker = await sql.reserve();
+    await blocker`BEGIN`;
+    const [{ pid }] = await blocker<{ pid: number }[]>`SELECT pg_backend_pid() AS pid`;
+    await blocker`UPDATE notify_targets SET purpose = ${change.purpose}, kind = ${change.kind}, config_ref = ${change.ref}, space_id = ${change.spaceId} WHERE key = ${name}`;
+    const reason = `web-pause-race-${tag()}`;
+    const pending = app.inject({ method: 'PUT', url: '/api/admin/spaces/default/content-subscription', headers,
+      payload: { targetName: name, groupId: null, enabled: false, subjectKinds: ['selected'], reason } }).then(response => response);
+    try { await waitForTargetLock(pid); }
+    finally { await blocker`COMMIT`; blocker.release(); }
+    const response = await pending;
+    const target = (await listTargets(change.spaceId)).find(target => target.key === name)!;
+    assert.equal(target.enabled, true);
+    assert.equal(target.purpose, change.purpose);
+    assert.equal(target.kind, change.kind);
+    assert.equal(target.config_ref, change.ref);
+    assert.equal((await sql`SELECT 1 FROM audit_log WHERE reason = ${reason}`).length, 0);
+    assert.equal(response.statusCode, change.status, response.body);
+    await setTargetEnabled(name, false, 'operator may still pause its target', actor, change.spaceId);
+    assert.equal((await targetState(name)).enabled, false);
+  });
 });
 
 test('scoped quota edits preserve reservations, reject invalid input and leave other channels and platform limits unchanged', async () => {
