@@ -4,6 +4,7 @@ import { Link, useNavigate } from "react-router";
 import type { Route } from "./+types/source-new";
 import type { AdminSourceCreated, AdminSourcePreview } from "@aihot/contracts/admin";
 import { useAdminAction } from "../../features/admin/action";
+import { useAdminDirty, useAdminSpace } from "../../features/admin/channel";
 import { fullDateTime, publicationValue } from "../../lib/format";
 import { KIND_LABEL, MODE_LABEL, TIER_LABEL } from "../../features/admin/labels";
 import { AdminPage, Button, Card, Empty, Field, Input, Select, Textarea } from "../../features/admin/ui";
@@ -18,16 +19,20 @@ const TEMPLATES: Record<string, Record<string, unknown>> = {
   mp_account: { ghid: "gh_", nickname: "" },
   external: {},
 };
+const INITIAL_FORM = { id: "", name: "", kind: "rss", tier: "T2", participation_mode: "editorial", interval_minutes: 30, first_party: false, site_fulltext: SOURCE_DEFAULTS.siteFulltext, syndicate_fulltext: false, tags: "" };
+const INITIAL_CONFIG = JSON.stringify(TEMPLATES.rss, null, 2);
 
 
 export default function NewSource() {
   const navigate = useNavigate();
+  const { space, path, api } = useAdminSpace();
   const { run, pending } = useAdminAction();
-  const [form, setForm] = useState({ id: "", name: "", kind: "rss", tier: "T2", participation_mode: "editorial", interval_minutes: 30, first_party: false, site_fulltext: SOURCE_DEFAULTS.siteFulltext, syndicate_fulltext: false, tags: "" });
-  const [config, setConfig] = useState(JSON.stringify(TEMPLATES.rss, null, 2));
+  const [form, setForm] = useState(() => ({ ...INITIAL_FORM }));
+  const [config, setConfig] = useState(INITIAL_CONFIG);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<AdminSourcePreview | null>(null);
   const [duplicate, setDuplicate] = useState<{ id: string; name: string } | null>(null);
+  const { clear } = useAdminDirty(JSON.stringify(form) !== JSON.stringify(INITIAL_FORM) || config !== INITIAL_CONFIG);
 
   const parsed = () => {
     try {
@@ -98,16 +103,17 @@ export default function NewSource() {
           </div>
           {duplicate && (
             <div className="mt-4 rounded-card bg-amber/10 px-4 py-3 text-[13px] text-ink-2 ring-1 ring-amber/25">
-              这个地址已经在监控：<Link className="font-medium text-accent" to={`/admin/sources/${encodeURIComponent(duplicate.id)}`}>{duplicate.name}</Link>（{duplicate.id}）。没有新建。
+              这个地址已经在监控：<Link className="font-medium text-accent" to={path(`/sources/${encodeURIComponent(duplicate.id)}`)}>{duplicate.name}</Link>（{duplicate.id}）。没有新建。
             </div>
           )}
           <div className="mt-5 flex justify-end gap-2">
             <Button
+              disabled={!space.enabled}
               busy={pending === "preview"}
               onClick={async () => {
                 const c = parsed();
                 if (!c) return;
-                const r = await run<AdminSourcePreview>("POST", "/api/admin/sources/preview", { id: form.id || "draft", kind: form.kind, config: c }, { label: "preview", revalidate: false });
+                const r = await run<AdminSourcePreview>("POST", api("/sources/preview"), { id: form.id || "draft", kind: form.kind, config: c }, { label: "preview", revalidate: false });
                 if (r) setPreview(r);
               }}
             >
@@ -122,12 +128,12 @@ export default function NewSource() {
                 if (!c) return;
                 const r = await run<AdminSourceCreated>(
                   "POST",
-                  "/api/admin/sources",
+                  api("/sources"),
                   { ...form, tags: form.tags.split(/[,，]/).map((t) => t.trim()).filter(Boolean), config: c },
                   { label: "create", revalidate: false },
                 );
                 if (!r) return;
-                if (r.created) navigate(`/admin/sources/${encodeURIComponent(r.source.id)}`);
+                if (r.created) { clear(); navigate(path(`/sources/${encodeURIComponent(r.source.id)}`)); }
                 else setDuplicate(r.duplicate);
               }}
             >

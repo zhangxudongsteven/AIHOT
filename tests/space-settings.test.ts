@@ -9,19 +9,205 @@ import { configureContentTarget, listTargets, setTargetEnabled, updateBudget } f
 import { defaultSpaceConfig, storeSpaceConfig } from '@aihot/backend/spaces/context';
 import { getSpaceBudgets, setSpaceBudget } from '@aihot/backend/spaces/quotas';
 import { ensureContentTargets } from '@aihot/backend/notify/deliver';
+import Fastify from 'fastify';
+import { config } from '@aihot/backend/config';
+import { passwordLogin, SESSION_COOKIE, sessionPrincipal } from '@aihot/backend/admin/auth';
+import { registerAdmin } from '../apps/api/src/routes/admin.ts';
+import { upsertMaterial } from '@aihot/backend/content/materials';
 
 const actor = `settings-${tag()}`;
-after(closeDb);
-async function channel() {
-  const id = `settings-${tag()}`;
+const app = Fastify({ logger: false });
+registerAdmin(app);
+const originalAdmin = { password: config.adminPassword, dev: config.devAdmin };
+const webhookEnv = ['FEISHU_PUSH_WEBHOOK_URL', 'FEISHU_SECURITY_WEBHOOK_URL', 'LLM_API_KEY'];
+const originalEnv = new Map(webhookEnv.map(key => [key, process.env[key]]));
+config.adminPassword = `settings-password-${tag()}`;
+config.devAdmin = null;
+after(async () => {
+  await app.close(); config.adminPassword = originalAdmin.password; config.devAdmin = originalAdmin.dev;
+  for (const [key, value] of originalEnv) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  await closeDb();
+});
+async function adminHeaders() {
+  const { token } = await passwordLogin(config.adminPassword!, '/admin', 'synthetic-settings-test');
+  const cookie = `${SESSION_COOKIE}=${token}`;
+  return { cookie, 'x-csrf-token': (await sessionPrincipal(cookie))!.csrf };
+}
+async function channel(name?: string, id = `settings-${tag()}`) {
   await sql`INSERT INTO spaces(id,slug,enabled) VALUES(${id},${id},true)`;
-  const context = await storeSpaceConfig(id, defaultSpaceConfig());
+  const value = structuredClone(defaultSpaceConfig());
+  if (name) value.siteName = name;
+  const context = await storeSpaceConfig(id, value);
   await sql`UPDATE spaces SET active_config_version=${context.configVersion} WHERE id=${id}`;
   return context;
 }
 const targetInput = (name = `group-${tag()}`) => ({ name, kind: 'feishu_webhook' as const, configRef: 'TEST_SPACE_WEBHOOK', subjectKinds: ['selected'] as Array<'selected'|'report'>, enabled: false, reason: 'configure channel group' });
 const targetState = async (key: string) => (await sql`SELECT space_id,kind,enabled,enabled_at::text AS enabled_at,config_ref,subject_kinds,updated_at::text AS updated_at FROM notify_targets WHERE key=${key}`)[0]!;
 const platformInput = (limit: number) => ({ perMinute: limit, perHour: limit, perDay: limit, reason: 'platform capacity' });
+
+test('admin channel discovery includes disabled channels and counts only their enabled failing sources', async () => {
+  const [a, b] = await Promise.all([channel('AI fixture'), channel('Security fixture')]);
+  await sql`UPDATE spaces SET enabled = false WHERE id = ${b.spaceId}`;
+  await sql`INSERT INTO sources (id, name, kind, space_id, enabled, health) VALUES
+    (${`count-a-${tag()}`}, 'A failing', 'rss', ${a.spaceId}, true, 'failing'),
+    (${`count-b-${tag()}`}, 'B failing', 'rss', ${b.spaceId}, true, 'failing'),
+    (${`count-off-${tag()}`}, 'A disabled', 'rss', ${a.spaceId}, false, 'failing')`;
+  assert.equal((await app.inject('/api/admin/spaces')).statusCode, 401);
+  const response = await app.inject({ url: '/api/admin/spaces', headers: await adminHeaders() });
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.headers['cache-control'], 'no-store');
+  const spaces = response.json().spaces;
+  assert.deepEqual(spaces.find((s: { id: string }) => s.id === a.spaceId), { id: a.spaceId, slug: a.spaceId, name: 'AI fixture', enabled: true, failedSources: 1 });
+  assert.deepEqual(spaces.find((s: { id: string }) => s.id === b.spaceId), { id: b.spaceId, slug: b.spaceId, name: 'Security fixture', enabled: false, failedSources: 1 });
+});
+
+test('scoped settings expose only registered channel groups, scoped budgets and explicit environment gates', async () => {
+  const security = await channel('Security settings fixture', 'security');
+  process.env.FEISHU_PUSH_WEBHOOK_URL = 'https://open.feishu.cn/open-apis/bot/v2/hook/fictional-ai';
+  process.env.FEISHU_SECURITY_WEBHOOK_URL = 'https://open.feishu.cn/open-apis/bot/v2/hook/fictional-security';
+  process.env.LLM_API_KEY = 'not-a-group-secret';
+  const knownName = `registered-${tag()}`;
+  const known = await configureContentTarget('default', { ...targetInput(knownName), configRef: 'FEISHU_PUSH_WEBHOOK_URL' }, actor);
+  const unregistered = await configureContentTarget('default', { ...targetInput(), configRef: 'LLM_API_KEY' }, actor);
+  const foreign = await configureContentTarget(security.spaceId, { ...targetInput(), configRef: 'FEISHU_SECURITY_WEBHOOK_URL' }, actor);
+  const service = `scope-${tag()}`;
+  await updateBudget(service, platformInput(100), actor);
+  await setSpaceBudget('default', service, { ...platformInput(10), reservedDay: 3 }, actor);
+  await setSpaceBudget(security.spaceId, service, platformInput(20), actor);
+  const headers = await adminHeaders();
+  const response = await app.inject({ url: '/api/admin/spaces/default/settings', headers });
+  assert.equal(response.statusCode, 200);
+  const settings = response.json();
+  assert.deepEqual(settings.pushGroups, [{ id: 'main', label: '现有飞书群', configured: true }]);
+  assert.deepEqual(settings.gates, { collectEnabled: process.env.COLLECT_ENABLED === 'true', modelCallsEnabled: config.modelCallsEnabled, contentPushEnabled: false });
+  assert.equal(settings.space.id, 'default');
+  assert.ok(settings.space.active_config_version);
+  assert.ok(settings.targets.every((t: { space_id: string }) => t.space_id === 'default'));
+  assert.equal(settings.targets.find((t: { key: string }) => t.key === known.key).targetName, knownName);
+  assert.equal(settings.targets.find((t: { key: string }) => t.key === known.key).groupId, 'main');
+  assert.equal(settings.targets.find((t: { key: string }) => t.key === unregistered.key).groupId, null);
+  assert.ok(!response.body.includes(String(foreign.key)));
+  assert.ok(!response.body.includes('fictional-ai') && !response.body.includes('fictional-security') && !response.body.includes('not-a-group-secret'));
+  assert.equal(settings.budgets.find((b: { service: string }) => b.service === service).per_day, 10);
+  assert.equal(settings.budgets.find((b: { service: string }) => b.service === service).reserved_day, 3);
+  assert.equal(settings.platformBudgets.find((b: { service: string }) => b.service === service).per_day, 100);
+  const securitySettings = await app.inject({ url: '/api/admin/spaces/security/settings', headers });
+  assert.equal(securitySettings.statusCode, 200);
+  assert.equal(securitySettings.json().budgets.find((b: { service: string }) => b.service === service).per_day, 20);
+  assert.ok(securitySettings.json().targets.every((t: { space_id: string }) => t.space_id === 'security'));
+  assert.equal((await app.inject({ url: '/api/admin/spaces/missing-channel/settings', headers })).statusCode, 404);
+});
+
+test('web subscriptions accept only channel group IDs, require CSRF and never deliver on save', async () => {
+  process.env.FEISHU_PUSH_WEBHOOK_URL = 'https://open.feishu.cn/open-apis/bot/v2/hook/fictional-subscription';
+  const headers = await adminHeaders();
+  const url = '/api/admin/spaces/default/content-subscription';
+  const payload = { targetName: `web-${tag()}`, groupId: 'main', enabled: true, subjectKinds: ['selected'], reason: 'configure an existing group' };
+  const [{ deliveries }] = await sql<{ deliveries: number }[]>`SELECT count(*)::int AS deliveries FROM deliveries`;
+  assert.equal((await app.inject({ method: 'PUT', url, headers: { cookie: headers.cookie }, payload })).statusCode, 403);
+  const saved = await app.inject({ method: 'PUT', url, headers, payload });
+  assert.equal(saved.statusCode, 200, saved.body);
+  assert.equal(saved.json().groupId, 'main');
+  assert.equal(saved.json().targetName, payload.targetName);
+  assert.equal(saved.json().space_id, 'default');
+  assert.equal(saved.json().enabled, true);
+  const before = await targetState(payload.targetName);
+  for (const bad of [
+    { ...payload, configRef: 'LLM_API_KEY' }, { ...payload, webhook: 'https://example.invalid/secret' },
+    { ...payload, groupId: 'not-registered' }, { ...payload, targetName: 'space:security:foreign' },
+    { ...payload, enabled: 'true' }, { ...payload, subjectKinds: ['everything'] },
+  ]) assert.equal((await app.inject({ method: 'PUT', url, headers, payload: bad })).statusCode, 400);
+  assert.deepEqual(await targetState(payload.targetName), before);
+  const unbound = await channel('Unregistered group fixture', 'constructor');
+  const unboundSettings = await app.inject({ url: `/api/admin/spaces/${unbound.spaceId}/settings`, headers });
+  assert.equal(unboundSettings.statusCode, 200);
+  assert.deepEqual(unboundSettings.json().pushGroups, []);
+  assert.equal((await app.inject({ method: 'PUT', url: `/api/admin/spaces/${unbound.spaceId}/content-subscription`, headers, payload })).statusCode, 400);
+  assert.equal((await listTargets(unbound.spaceId)).length, 0);
+  assert.equal((await app.inject({ method: 'PUT', url: '/api/admin/spaces/missing-channel/content-subscription', headers, payload })).statusCode, 404);
+  delete process.env.FEISHU_PUSH_WEBHOOK_URL;
+  assert.equal((await app.inject({ method: 'PUT', url, headers, payload: { ...payload, targetName: `missing-${tag()}` } })).statusCode, 400);
+  assert.equal((await app.inject({ method: 'PUT', url, headers, payload: { ...payload, enabled: false } })).statusCode, 200);
+  const legacyName = `unregistered-${tag()}`;
+  await configureContentTarget('default', { ...targetInput(legacyName), configRef: 'OPERATOR_ONLY_WEBHOOK', enabled: true, subjectKinds: ['selected', 'report'] }, actor);
+  const paused = await app.inject({ method: 'PUT', url, headers, payload: { ...payload, targetName: legacyName, groupId: null, enabled: false } });
+  assert.equal(paused.statusCode, 200, paused.body);
+  assert.equal(paused.json().config_ref, 'OPERATOR_ONLY_WEBHOOK');
+  assert.deepEqual(paused.json().subject_kinds, ['report', 'selected']);
+  assert.equal(paused.json().enabled, false);
+  assert.equal((await app.inject({ method: 'PUT', url, headers, payload: { ...payload, targetName: legacyName, groupId: null } })).statusCode, 400);
+  assert.equal((await sql<{ deliveries: number }[]>`SELECT count(*)::int AS deliveries FROM deliveries`)[0]!.deliveries, deliveries);
+  const audits = await sql`SELECT action, after FROM audit_log WHERE subject = ${`space:default:notify-target:${payload.targetName}`}`;
+  assert.equal(audits.length, 2);
+  assert.ok(audits.every(row => row.action === 'notify.configure'));
+  assert.ok(!JSON.stringify(audits).includes('fictional-subscription'));
+  const emptyName = `unconfigured-${tag()}`;
+  await configureContentTarget('default', { ...targetInput(emptyName), configRef: null }, actor);
+  assert.equal((await app.inject({ method: 'PUT', url, headers, payload: { ...payload, targetName: emptyName, enabled: false } })).statusCode, 200);
+});
+
+test('web subscription names cannot replace an operations target', async () => {
+  const name = `operations-${tag()}`;
+  await sql`INSERT INTO notify_targets (key, purpose, kind, enabled, note) VALUES (${name}, 'alert', 'log', true, 'operator-managed')`;
+  const before = await targetState(name);
+  const response = await app.inject({ method: 'PUT', url: '/api/admin/spaces/default/content-subscription', headers: await adminHeaders(),
+    payload: { targetName: name, groupId: 'main', enabled: false, subjectKinds: ['selected'], reason: 'attempt to repurpose target' } });
+  assert.equal(response.statusCode, 400, response.body);
+  assert.deepEqual(await targetState(name), before);
+});
+
+test('unregistered webhook routes stay operator-managed until their reference is registered', async () => {
+  const name = `operator-route-${tag()}`;
+  await configureContentTarget('default', { ...targetInput(name), configRef: 'OPERATOR_ROUTE_WEBHOOK', enabled: true }, actor);
+  const before = await targetState(name);
+  const response = await app.inject({ method: 'PUT', url: '/api/admin/spaces/default/content-subscription', headers: await adminHeaders(),
+    payload: { targetName: name, groupId: 'main', enabled: false, subjectKinds: ['report'], reason: 'attempt to replace operator routing' } });
+  assert.equal(response.statusCode, 400, response.body);
+  assert.deepEqual(await targetState(name), before);
+});
+
+test('scoped quota edits preserve reservations, reject invalid input and leave other channels and platform limits unchanged', async () => {
+  const [a, b] = await Promise.all([channel(), channel()]);
+  const service = `web-budget-${tag()}`;
+  await updateBudget(service, platformInput(100), actor);
+  await setSpaceBudget(a.spaceId, service, { ...platformInput(10), reservedMinute: 2, reservedHour: 3, reservedDay: 4 }, actor);
+  await setSpaceBudget(b.spaceId, service, { ...platformInput(20), reservedDay: 5 }, actor);
+  const headers = await adminHeaders();
+  const url = `/api/admin/spaces/${a.spaceId}/budgets/${service}`;
+  const payload = { perMinute: 30, perHour: 40, perDay: 50, reason: 'adjust channel limits' };
+  assert.equal((await app.inject({ method: 'PUT', url, headers: { cookie: headers.cookie }, payload })).statusCode, 403);
+  const saved = await app.inject({ method: 'PUT', url, headers, payload });
+  assert.equal(saved.statusCode, 200, saved.body);
+  assert.equal(saved.json().space_id, a.spaceId);
+  assert.deepEqual([saved.json().reserved_minute, saved.json().reserved_hour, saved.json().reserved_day], [2, 3, 4]);
+  const settings = (await app.inject({ url: `/api/admin/spaces/${a.spaceId}/settings`, headers })).json();
+  assert.equal(settings.budgets.find((row: { service: string }) => row.service === service).per_day, 50);
+  assert.equal((await getSpaceBudgets(b.spaceId)).find(row => row.service === service)?.per_day, 20);
+  assert.equal((await sql`SELECT per_day FROM budgets WHERE service = ${service}`)[0]!.per_day, 100);
+  for (const bad of [
+    { ...payload, perDay: -1 }, { ...payload, perMinute: '30' }, { ...payload, perHour: 2.5 },
+    { ...payload, perDay: 3 }, { ...payload, reservedDay: 51 }, { ...payload, reservedDay: -1 },
+    { ...payload, perDay: 2_147_483_648 }, { ...payload, reason: '' }, { ...payload, spaceId: b.spaceId },
+  ]) assert.equal((await app.inject({ method: 'PUT', url, headers, payload: bad })).statusCode, 400);
+  assert.equal((await getSpaceBudgets(a.spaceId)).find(row => row.service === service)?.per_day, 50);
+  assert.equal((await app.inject({ method: 'PUT', url: `/api/admin/spaces/missing-channel/budgets/${service}`, headers, payload })).statusCode, 404);
+  const audit = await sql`SELECT after FROM audit_log WHERE action = 'space.budget.update' AND subject = ${`space:${a.spaceId}:budget:${service}`} AND reason = ${payload.reason}`;
+  assert.equal(audit.length, 1);
+  assert.equal(audit[0]!.after.space_id, a.spaceId);
+  assert.equal(audit[0]!.after.reserved_day, 4);
+});
+
+test('global content diagnosis identifies the article channel for a scoped source link', async () => {
+  const context = await channel('Diagnostic fixture');
+  const sourceId = `diagnostic-${tag()}`;
+  await sql`INSERT INTO sources (id, name, kind, space_id) VALUES (${sourceId}, 'Diagnostic source', 'rss', ${context.spaceId})`;
+  const { articleId } = await upsertMaterial({ sourceId, url: `https://example.invalid/${sourceId}`, title: 'Diagnostic article',
+    bodyText: 'Synthetic body', bodyStatus: 'ok', publishedAt: null, via: 'fetch' }, sql, context);
+  const response = await app.inject({ url: `/api/admin/content/${articleId}`, headers: await adminHeaders() });
+  assert.equal(response.statusCode, 200, response.body);
+  assert.equal(response.json().article.space_id, context.spaceId);
+  assert.equal(response.json().article.source_id, sourceId);
+});
 
 test('targets have explicit channel ownership and legacy toggles cannot reach another channel', async () => {
   const [a,b] = await Promise.all([channel(),channel()]);

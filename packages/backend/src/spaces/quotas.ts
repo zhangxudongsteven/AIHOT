@@ -30,10 +30,11 @@ export type BudgetLimits = Pick<SpaceBudgetInput, "perMinute" | "perHour" | "per
 export type BudgetWindow = "minute" | "hour" | "day";
 const windows = ["minute", "hour", "day"] as const;
 const retryAfter = { minute: 60, hour: 600, day: 3600 };
+const invalidQuota = (message: string) => Object.assign(new Error(message), { statusCode: 400 });
 
 function validateLimits(limits: BudgetLimits): void {
   for (const value of [limits.perMinute, limits.perHour, limits.perDay]) {
-    if (!Number.isInteger(value) || value < 0 || value > 2_147_483_647) throw new Error("budgets are non-negative integers (0 stops the service)");
+    if (!Number.isInteger(value) || value < 0 || value > 2_147_483_647) throw invalidQuota("budgets are non-negative integers (0 stops the service)");
   }
 }
 
@@ -45,25 +46,27 @@ export async function validatePlatformReservations(tx: Db, service: string, limi
     SELECT coalesce(sum(reserved_minute), 0) AS minute, coalesce(sum(reserved_hour), 0) AS hour,
            coalesce(sum(reserved_day), 0) AS day FROM space_budgets WHERE service = ${service}`;
   if (row!.minute > limits.perMinute || row!.hour > limits.perHour || row!.day > limits.perDay) {
-    throw new Error("platform budget cannot be lower than allocated channel reservations");
+    throw invalidQuota("platform budget cannot be lower than allocated channel reservations");
   }
 }
 
 /** An absent channel row means no additional limit; no business quota is created implicitly. */
 export async function setSpaceBudget(spaceId: string, service: string, input: SpaceBudgetInput, actor: string): Promise<SpaceBudget> {
-  if (!spaceId?.trim() || !service?.trim()) throw new Error("space and service are required");
-  if (!input.reason?.trim()) throw new Error("reason is required");
+  if (!spaceId?.trim() || !service?.trim()) throw invalidQuota("space and service are required");
+  if (!input.reason?.trim()) throw invalidQuota("reason is required");
   validateLimits(input);
-  const reserved = { perMinute: input.reservedMinute ?? 0, perHour: input.reservedHour ?? 0, perDay: input.reservedDay ?? 0 };
-  validateLimits(reserved);
-  if (reserved.perMinute > input.perMinute || reserved.perHour > input.perHour || reserved.perDay > input.perDay) {
-    throw new Error("channel reservations cannot exceed its limits");
-  }
   return sql.begin(async tx => {
     await tx`SELECT pg_advisory_xact_lock(hashtext(${"budget:" + service}))`;
     await tx`SELECT pg_advisory_xact_lock(hashtext(${"space-budget:" + spaceId + ":" + service}))`;
     if (!(await tx`SELECT 1 FROM spaces WHERE id = ${spaceId}`).length) throw new Error(`Unknown space: ${spaceId}`);
     const [before] = await tx<SpaceBudget[]>`SELECT * FROM space_budgets WHERE space_id = ${spaceId} AND service = ${service}`;
+    // Editing request ceilings must not silently release an existing channel's reserved capacity.
+    const reserved = { perMinute: input.reservedMinute ?? before?.reserved_minute ?? 0,
+      perHour: input.reservedHour ?? before?.reserved_hour ?? 0, perDay: input.reservedDay ?? before?.reserved_day ?? 0 };
+    validateLimits(reserved);
+    if (reserved.perMinute > input.perMinute || reserved.perHour > input.perHour || reserved.perDay > input.perDay) {
+      throw invalidQuota("channel reservations cannot exceed its limits");
+    }
     const [after] = await tx<SpaceBudget[]>`INSERT INTO space_budgets
       (space_id, service, per_minute, per_hour, per_day, reserved_minute, reserved_hour, reserved_day, note)
       VALUES (${spaceId}, ${service}, ${input.perMinute}, ${input.perHour}, ${input.perDay},
@@ -74,7 +77,7 @@ export async function setSpaceBudget(spaceId: string, service: string, input: Sp
     const [platform] = await tx<{ per_minute: number; per_hour: number; per_day: number }[]>`
       SELECT per_minute, per_hour, per_day FROM budgets WHERE service = ${service}`;
     if (!platform && [reserved.perMinute, reserved.perHour, reserved.perDay].some(n => n > 0)) {
-      throw new Error("a finite platform budget is required before reserving channel capacity");
+      throw invalidQuota("a finite platform budget is required before reserving channel capacity");
     }
     if (platform) await validatePlatformReservations(tx, service, { perMinute: platform.per_minute, perHour: platform.per_hour, perDay: platform.per_day }, { allowStopped: false });
     await audit(actor, "space.budget.update", `space:${spaceId}:budget:${service}`, input.reason, before ?? null, after, { db: tx });

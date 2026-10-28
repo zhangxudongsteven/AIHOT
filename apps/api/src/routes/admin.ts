@@ -2,9 +2,11 @@
 // Every route goes through adminHandler (session + CSRF); manual changes are audited in the modules.
 import { readFile } from "node:fs/promises";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { z } from "zod";
 import type { AdminSourceUpdate } from "@aihot/contracts/admin";
 import { actorOf } from "@aihot/backend/admin/auth";
 import { navCounts } from "@aihot/backend/admin/navigation";
+import { adminSpace, listAdminSpaces, spaceSettings } from "@aihot/backend/admin/spaces";
 import { listAudit } from "@aihot/backend/audit";
 import { importSelectBenchRun, listSelectBenchRuns, selectBenchRun } from "@aihot/backend/admin/selectbench";
 import { modelsOverview, switchModel } from "@aihot/backend/admin/models";
@@ -15,10 +17,10 @@ import { requeueFailedArticles, runsOverview } from "@aihot/backend/admin/runs";
 import { resolveDelivery } from "@aihot/backend/notify/deliver";
 import { notificationIdentity } from "@aihot/backend/notify/context";
 import { sql } from "@aihot/backend/db";
-import { getSpaceBudgets, setSpaceBudget } from "@aihot/backend/spaces/quotas";
+import { setSpaceBudget } from "@aihot/backend/spaces/quotas";
 import { resolveSpaceAdminContext, type SpaceContext } from "@aihot/backend/spaces/context";
 import { releaseReceipt } from "@aihot/backend/operations/recover";
-import { configureContentTarget, listTargets, replaceContactQr, setTargetEnabled, settingsOverview, updateBudget } from "@aihot/backend/admin/settings";
+import { configureContentSubscription, configureContentTarget, replaceContactQr, setTargetEnabled, settingsOverview, updateBudget } from "@aihot/backend/admin/settings";
 import { createSource, fetchNow, listSources, previewSource, previewStoredSource, sourceDetail, updateSource } from "@aihot/backend/admin/sources";
 import { sendProblem } from "../http/respond.ts";
 import { adminHandler } from "./admin-auth.ts";
@@ -31,6 +33,12 @@ export const param = (req: FastifyRequest, name: string) => (req.params as Recor
 const notFound = (req: FastifyRequest, reply: FastifyReply) => sendProblem(req, reply, { status: 404, code: "not_found", detail: "Not found." });
 export const orNotFound = <T>(req: FastifyRequest, reply: FastifyReply, value: T | null) => (value === null || value === undefined ? notFound(req, reply) : value);
 export const page = (req: FastifyRequest) => Math.max(1, Number(q(req).page) || 1);
+const quotaCount = z.number().int().min(0).max(2_147_483_647);
+const spaceBudgetInput = z.object({
+  perMinute: quotaCount, perHour: quotaCount, perDay: quotaCount,
+  reservedMinute: quotaCount.optional(), reservedHour: quotaCount.optional(), reservedDay: quotaCount.optional(),
+  reason: z.string().trim().min(1),
+}).strict();
 
 function decodeImage(dataUrl: unknown): Buffer {
   const m = /^data:image\/(png|jpeg|webp);base64,(.+)$/s.exec(String(dataUrl ?? ""));
@@ -39,6 +47,7 @@ function decodeImage(dataUrl: unknown): Buffer {
 }
 
 export function registerAdmin(app: FastifyInstance) {
+  app.get("/api/admin/spaces", adminHandler(async () => listAdminSpaces()));
   // Legacy source addresses stay in default; explicit channel addresses share the same guard.
   const sourceRoutes = (prefix: string, scoped = false) => {
     const handler = (fn: (req: FastifyRequest, reply: FastifyReply, actor: string, context?: SpaceContext) => Promise<unknown>) => adminHandler(async (req, reply, admin) => {
@@ -124,13 +133,22 @@ export function registerAdmin(app: FastifyInstance) {
     return orNotFound(req, reply, await setTargetEnabled(param(req, "key"), b.enabled === true, b.reason, actorOf(admin), b.spaceId));
   }));
   app.put("/api/admin/budgets/:service", adminHandler(async (req, _reply, admin) => updateBudget(param(req, "service"), body(req) as never, actorOf(admin))));
-  app.get("/api/admin/spaces/:spaceId/settings", adminHandler(async (req, reply) => {
+  app.get("/api/admin/spaces/:spaceId/settings", adminHandler(async (req, reply) => orNotFound(req, reply, await spaceSettings(param(req, "spaceId")))));
+  app.put("/api/admin/spaces/:spaceId/content-subscription", adminHandler(async (req, reply, admin) => {
     const spaceId = param(req, "spaceId");
-    const [space] = await sql`SELECT id, slug, enabled, active_config_version FROM spaces WHERE id = ${spaceId}`;
-    return space ? { space, targets: await listTargets(spaceId), budgets: await getSpaceBudgets(spaceId) } : notFound(req, reply);
+    if (!await adminSpace(spaceId)) return notFound(req, reply);
+    return orNotFound(req, reply, await configureContentSubscription(spaceId, body(req) as never, actorOf(admin)));
   }));
-  app.put("/api/admin/spaces/:spaceId/notify-targets", adminHandler(async (req, _reply, admin) => configureContentTarget(param(req, "spaceId"), body(req) as never, actorOf(admin))));
-  app.put("/api/admin/spaces/:spaceId/budgets/:service", adminHandler(async (req, _reply, admin) => setSpaceBudget(param(req, "spaceId"), param(req, "service"), body(req) as never, actorOf(admin))));
+  app.put("/api/admin/spaces/:spaceId/notify-targets", adminHandler(async (req, reply, admin) => {
+    const spaceId = param(req, "spaceId");
+    if (!await adminSpace(spaceId)) return notFound(req, reply);
+    return configureContentTarget(spaceId, body(req) as never, actorOf(admin));
+  }));
+  app.put("/api/admin/spaces/:spaceId/budgets/:service", adminHandler(async (req, reply, admin) => {
+    const spaceId = param(req, "spaceId");
+    if (!await adminSpace(spaceId)) return notFound(req, reply);
+    return setSpaceBudget(spaceId, param(req, "service"), spaceBudgetInput.parse(body(req)), actorOf(admin));
+  }));
   app.post("/api/admin/spaces/:spaceId/deliveries/:id/resolve", adminHandler(async (req, reply, admin) => {
     const context = await notificationIdentity({ spaceId: param(req, "spaceId") });
     return orNotFound(req, reply, await resolveDelivery(Number(param(req, "id")), body(req) as never, actorOf(admin), context));

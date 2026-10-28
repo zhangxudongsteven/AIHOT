@@ -1,11 +1,12 @@
 // Operator settings: about-page QR codes (replaced without a release), notification targets
 // (switching a group on records enabled_at so older content is never back-filled) and per-service
 // request budgets (the circuit breaker paid calls check before sending).
-import type { AdminBudget, AdminNotifyTarget, AdminSettings, BeforeJson } from "@aihot/contracts/admin";
+import type { AdminBudget, AdminContentSubscriptionInput, AdminNotifyTarget, AdminPushGroup, AdminSettings, AdminSpaceNotifyTarget, BeforeJson } from "@aihot/contracts/admin";
+import { DEPLOYMENT } from "@aihot/site";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
-import { config } from "../config.ts";
+import { config, credential } from "../config.ts";
 import { sql } from "../db.ts";
 import { sha256 } from "../lib/ids.ts";
 import { loadContact, type ContactSettings } from "../site/contact.ts";
@@ -51,6 +52,56 @@ export async function listTargets(spaceId?: string): Promise<BeforeJson<AdminNot
     FROM notify_targets t WHERE (${spaceId ?? null}::text IS NULL OR t.space_id = ${spaceId ?? null}) ORDER BY t.space_id, t.purpose, t.key`;
 }
 
+const contentBindings = (spaceId: string) => Object.hasOwn(DEPLOYMENT.contentPushGroups, spaceId) ? DEPLOYMENT.contentPushGroups[spaceId] : [];
+
+/** Only explicitly registered content-group references are inspected, never environment inventories. */
+export function contentPushGroups(spaceId: string): AdminPushGroup[] {
+  return contentBindings(spaceId).map(({ id, label, configRef }) => ({ id, label, configured: credential("integrations", configRef) !== null }));
+}
+
+export async function listSpaceTargets(spaceId: string): Promise<BeforeJson<AdminSpaceNotifyTarget>[]> {
+  return (await listTargets(spaceId)).map(target => {
+    const prefix = spaceId === DEFAULT_SPACE_ID ? "" : `space:${spaceId}:`;
+    const name = target.key.startsWith(prefix) ? target.key.slice(prefix.length) : "";
+    const content = target.purpose === "content";
+    return { ...target,
+      targetName: content && /^[a-zA-Z0-9_-]{1,80}$/.test(name) ? name : null,
+      groupId: content && target.kind === "feishu_webhook" ? contentBindings(spaceId).find(group => group.configRef === target.config_ref)?.id ?? null : null,
+    };
+  });
+}
+
+const ContentSubscriptionInput = z.object({
+  targetName: z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/),
+  groupId: z.string().min(1).nullable(),
+  enabled: z.boolean(),
+  subjectKinds: z.array(z.enum(["selected", "report"])).min(1),
+  reason: z.string().trim().min(1),
+}).strict();
+const invalidSetting = (message: string) => Object.assign(new Error(message), { statusCode: 400 });
+
+/** The webpage chooses a registered group ID; operator API/CLI credential references stay compatible. */
+export async function configureContentSubscription(spaceId: string, input: AdminContentSubscriptionInput, actor: string): Promise<BeforeJson<AdminSpaceNotifyTarget> | null> {
+  const value = ContentSubscriptionInput.parse(input);
+  const key = spaceId === DEFAULT_SPACE_ID ? value.targetName : `space:${spaceId}:${value.targetName}`;
+  const existing = (await listSpaceTargets(spaceId)).find(target => target.key === key);
+  if (existing && (existing.purpose !== "content" || existing.kind !== "feishu_webhook")) throw invalidSetting("This target is managed by an operator");
+  if (value.groupId === null) {
+    if (value.enabled) throw invalidSetting("Choose a registered group before enabling content push");
+    if (!existing) return null;
+    if (existing.groupId !== null) throw invalidSetting("Use the target's registered group");
+    await setTargetEnabled(existing.key, false, value.reason, actor, spaceId);
+  } else {
+    if (existing && existing.config_ref !== null && existing.groupId === null) throw invalidSetting("Register this target's existing reference before editing its subscription");
+    const group = contentBindings(spaceId).find(group => group.id === value.groupId);
+    if (!group) throw invalidSetting("Group is not registered for this channel");
+    if (value.enabled && !credential("integrations", group.configRef)) throw invalidSetting("The group's webhook credential is not configured");
+    await configureContentTarget(spaceId, { name: value.targetName, kind: "feishu_webhook", configRef: group.configRef,
+      subjectKinds: value.subjectKinds, enabled: value.enabled, reason: value.reason }, actor);
+  }
+  return (await listSpaceTargets(spaceId)).find(target => target.targetName === value.targetName) ?? null;
+}
+
 export async function setTargetEnabled(key: string, enabled: boolean, reason: string, actor: string, spaceId = DEFAULT_SPACE_ID) {
   if (!reason?.trim()) throw new Error("reason is required");
   return sql.begin(async tx => {
@@ -75,8 +126,8 @@ const ContentTargetInput = z.object({
 /** Credentials stay in the integrations secret store; the database holds only the reference name. */
 export async function configureContentTarget(spaceId: string, input: z.infer<typeof ContentTargetInput>, actor: string) {
   const value = ContentTargetInput.parse(input);
-  if (value.kind === "feishu_webhook" && value.enabled && !value.configRef) throw new Error("An enabled webhook target requires a credential reference");
-  if (spaceId !== DEFAULT_SPACE_ID && ["FEISHU_PUSH_WEBHOOK_URL", "FEISHU_PUSH_MIRROR_WEBHOOK_URL"].includes(value.configRef ?? "")) throw new Error("A channel must use its own credential reference");
+  if (value.kind === "feishu_webhook" && value.enabled && !value.configRef) throw invalidSetting("An enabled webhook target requires a credential reference");
+  if (spaceId !== DEFAULT_SPACE_ID && ["FEISHU_PUSH_WEBHOOK_URL", "FEISHU_PUSH_MIRROR_WEBHOOK_URL"].includes(value.configRef ?? "")) throw invalidSetting("A channel must use its own credential reference");
   const key = spaceId === DEFAULT_SPACE_ID ? value.name : `space:${spaceId}:${value.name}`;
   return sql.begin(async tx => {
     if (!(await tx`SELECT 1 FROM spaces WHERE id = ${spaceId}`).length) throw new Error(`Unknown space: ${spaceId}`);

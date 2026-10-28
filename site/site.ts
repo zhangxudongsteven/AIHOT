@@ -272,6 +272,11 @@ export const DEPLOYMENT = {
   credentialsDir: null as string | null,
   /** 凭据分组的文件名（放在凭据目录下，选填）：没写的分组用“分组名.env”，比如 models.env。 */
   credentialFiles: {} as Partial<Record<string, string>>,
+  /** 后台可选择的内容群：只登记频道自己的凭据引用，实际 Webhook 仍只保存在后端环境配置。 */
+  contentPushGroups: {
+    default: [{ id: "main", label: "现有飞书群", configRef: "FEISHU_PUSH_WEBHOOK_URL" }],
+    security: [{ id: "main", label: "现有飞书群", configRef: "FEISHU_SECURITY_WEBHOOK_URL" }],
+  } as Record<string, Array<{ id: string; label: string; configRef: string }>>,
   /** 这个部署额外要求的凭据（[分组, 环境变量名]）；生产 API 启动时检查，默认没有额外要求。 */
   requiredSecrets: [] as const,
   /** 线上 api 收到的 Host（CDN 回源用的域名，选填）；本地开发时，网页开发服务器转给 api 的请求也换成它，和线上一致。 */
