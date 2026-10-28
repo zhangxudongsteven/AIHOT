@@ -13,8 +13,8 @@ import { FeedItem } from "./FeedItem";
 import { IconChevronDown } from "../../components/icons";
 import { RingMark } from "@aihot/site/brand/Logo.tsx";
 import { EmptyState } from "../../components/ui/Page";
-import { beijingDate, beijingTime, beijingWeekday, monthDay } from "@aihot/contracts/time";
-import { byBeijingDay, weekdayShort } from "../../lib/format";
+import { beijingDate, beijingWeekday, monthDay } from "@aihot/contracts/time";
+import { byBeijingDay, clockTime, weekdayShort } from "../../lib/format";
 import { isHydrated } from "../../lib/hydration";
 import { markRead as markReadInSpace, useReadSet } from "../../lib/local-state";
 import { filterParams, listPath } from "../../lib/seo";
@@ -23,7 +23,7 @@ import { isReload, readSnapshot, restoreAnchor, saveSnapshot, useSaveOnLeave } f
 const AUTO_BATCHES = 3;
 
 interface ListState {
-  version: 2;
+  version: 3;
   cards: TimelineCard[];
   nextCursor: string | null;
   dayCounts: Record<string, number>;
@@ -34,7 +34,7 @@ interface ListState {
 }
 
 function fromResponse(r: TimelineResponse, unreadOnly = false): ListState {
-  return { version: 2, cards: r.cards, nextCursor: r.nextCursor, dayCounts: r.dayCounts, collapsed: [], batches: 1, unreadOnly };
+  return { version: 3, cards: r.cards, nextCursor: r.nextCursor, dayCounts: r.dayCounts, collapsed: [], batches: 1, unreadOnly };
 }
 
 /**
@@ -121,7 +121,7 @@ export function TimelineSlot({ at, children, fresh = false, delay = 0, dataKey }
       {/* Phones: the row without the rail (the item shows its time); a hairline between rows. */}
       <div className="grid grid-cols-[minmax(0,1fr)] border-b border-line-soft py-3.5 group-last/slot:border-b-0 lg:grid-cols-[64px_22px_minmax(0,1fr)] lg:border-b-0 lg:py-0 lg:pb-3 lg:group-last/slot:pb-0">
         <time dateTime={at} className="mono hidden text-ink-3 lg:block lg:pt-[17px] lg:text-[12.5px] lg:font-semibold lg:leading-6">
-          {beijingTime(at)}
+          {clockTime(at)}
         </time>
         <span aria-hidden="true" className="relative hidden lg:block">
           <span className="absolute -bottom-[41px] left-[10.5px] top-[29px] w-px bg-line-strong group-last/slot:hidden" />
@@ -147,7 +147,7 @@ export function Timeline({ initial, filters }: { initial: TimelineResponse; filt
   const [state, setState] = useState<ListState>(() => {
     if (isHydrated()) {
       const snap = readSnapshot<ListState>(historyKey);
-      if (snap?.data.version === 2 && snap.data.cards.length > 0) return snap.data;
+      if (snap?.data.version === 3 && snap.data.cards.length > 0) return snap.data;
     }
     return fromResponse(initial);
   });
@@ -173,7 +173,7 @@ export function Timeline({ initial, filters }: { initial: TimelineResponse; filt
       setLoadingMore(false);
       setLoadError(false);
       const snap = readSnapshot<ListState>(historyKey);
-      if (snap?.data.version === 2 && snap.data.cards.length > 0) {
+      if (snap?.data.version === 3 && snap.data.cards.length > 0) {
         setState(snap.data);
         restoreAnchor(snap.anchor, snap.scrollY);
       } else {
@@ -203,13 +203,13 @@ export function Timeline({ initial, filters }: { initial: TimelineResponse; filt
     if (!isHydrated()) {
       // A full load keeps the server's fresh list when the reader reloaded; after a back/forward
       // that reloaded the document, it restores the saved list and position.
-      if (snap?.data.version === 2 && snap.data.cards.length > 0 && !isReload()) {
+      if (snap?.data.version === 3 && snap.data.cards.length > 0 && !isReload()) {
         setState(snap.data);
         requestAnimationFrame(() => restoreAnchor(snap.anchor, snap.scrollY));
       }
       return;
     }
-    if (snap?.data.version === 2 && snap.data.cards.length > 0) restoreAnchor(snap.anchor, snap.scrollY);
+    if (snap?.data.version === 3 && snap.data.cards.length > 0) restoreAnchor(snap.anchor, snap.scrollY);
   }, [historyKey]);
 
   // Save the snapshot whenever we leave this history entry.
@@ -340,8 +340,8 @@ export function Timeline({ initial, filters }: { initial: TimelineResponse; filt
                     const fresh = freshKeys.has(c.key);
                     const delay = fresh ? Math.min(order++, 10) * 40 : 0;
                     return (
-                      <TimelineSlot key={c.key} dataKey={c.key} at={c.anchorAt} fresh={fresh} delay={delay}>
-                        <FeedItem item={c.item} group={c.group} filters={filters} read={readSet.has(c.item.id) && !(unreadOnly && unreadVisible(c))} onOpen={markRead} at={c.anchorAt} />
+                      <TimelineSlot key={c.key} dataKey={c.key} at={c.anchorTime ?? c.anchorAt} fresh={fresh} delay={delay}>
+                        <FeedItem item={c.item} group={c.group} filters={filters} read={readSet.has(c.item.id) && !(unreadOnly && unreadVisible(c))} onOpen={markRead} at={c.anchorTime ?? c.anchorAt} />
                       </TimelineSlot>
                     );
                   })}

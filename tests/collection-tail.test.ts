@@ -9,6 +9,7 @@ import { config } from "@aihot/backend/config";
 import { closeDb, sql } from "@aihot/backend/db";
 import { QUEUES, stopBoss } from "@aihot/backend/jobs/queue";
 import { collectSource } from "@aihot/backend/sources/collect";
+import { MockAgent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
 
 type Kind = "rss" | "json_list" | "web_list";
 interface Item { url: string; title: string; date: string | null; summary: string; category?: string }
@@ -56,7 +57,7 @@ async function source(name: string, kind: Kind, rows: Item[], extra: Record<stri
   const path = `/listing/${id}`;
   const listing: Listing = { kind, items: rows, version: 1, requests: [] };
   listings.set(path, listing);
-  const mapping = kind === "rss" ? { feedUrl: base + path } : kind === "json_list"
+  const mapping = extra.adapter === "cisa_kev" ? {} : kind === "rss" ? { feedUrl: base + path } : kind === "json_list"
     ? { url: base + path, titlePaths: ["title"], urlTemplate: "{raw:url}", publishedAtPath: "date", summaryPaths: ["summary"], summaryIsBody: true }
     : { url: base + path, itemSelector: "article", linkSelector: "a", publishedAtSelector: "time" };
   await sql`INSERT INTO sources (id,name,kind,config,tier,participation_mode,cursor,next_fetch_at)
@@ -148,6 +149,70 @@ for (const reverse of [false, true]) {
     assert.equal(listing.requests.length, 1, "the tail costs no extra listing request");
   });
 }
+
+test("MSRC admits a bounded initial revision and later updates without importing the undated remainder", async () => {
+  const rows = items("msrc", 20);
+  for (const [index, row] of rows.entries()) {
+    row.url = `https://msrc.microsoft.com/update-guide/vulnerability/CVE-2026-${70000 + index}`;
+    row.date = new Date(Date.now() - 60000).toISOString();
+  }
+  rows[19]!.date = null;
+  const { id, listing } = await source("msrc", "rss", rows, { bodyAdapter: "msrc_csaf", _aihot: { initialBackfillLimit: 1 } }, false);
+  assert.equal((await collectSource(id)).created, 1);
+  const [first] = await sql`SELECT published_at,source_updated_at FROM articles WHERE source_id=${id}`;
+  assert.equal(first!.published_at, null);
+  assert.ok(first!.source_updated_at);
+  assert.equal((await collectSource(id)).created, 0);
+  assert.equal(await count(id), 1);
+  await sql`UPDATE sources SET cursor=jsonb_set(cursor,'{initializedAt}',${sql.json(new Date(Date.now() - 10000).toISOString())}) WHERE id=${id}`;
+  listing.items.push({ url: 'https://msrc.microsoft.com/update-guide/vulnerability/CVE-2026-79999', title: 'New advisory revision', date: new Date().toISOString(), summary: 'A new vendor revision.' });
+  listing.items[0]!.title = 'A corrected vendor title';
+  listing.version += 1;
+  const updated = await collectSource(id);
+  assert.deepEqual([updated.created, updated.revised], [1, 1]);
+  assert.equal(await count(id), 2);
+});
+
+test("KEV bounds its initial catalog and admits same-day additions and known corrections without importing its old remainder", async () => {
+  const origin = "https://www.cisa.gov";
+  const path = "/sites/default/files/feeds/known_exploited_vulnerabilities.json";
+  const today = new Date().toISOString().slice(0, 10);
+  const old = new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10);
+  const entry = (number: number, dateAdded: string) => ({
+    cveID: `CVE-2026-${number}`, vendorProject: "Example", product: "Example Server", vulnerabilityName: "Authorization bypass",
+    dateAdded, shortDescription: "An authorization bypass exposes protected data.", requiredAction: "Apply the vendor update.",
+    dueDate: today, knownRansomwareCampaignUse: "Unknown", notes: "See the vendor advisory.",
+  });
+  const entries = [entry(81001, today), entry(81002, today), ...Array.from({ length: 1500 }, (_, i) => entry(82000 + i, old))];
+  const { id } = await source("kev", "json_list", [], {
+    url: origin + path, adapter: "cisa_kev", externalIdPath: "cveID", identityByExternalId: true, sortByPublishedAt: true,
+    _aihot: { initialBackfillLimit: 1 },
+  }, false);
+  const previous = getGlobalDispatcher();
+  const agent = new MockAgent(); agent.disableNetConnect(); setGlobalDispatcher(agent);
+  const serve = (version: string) => agent.get(origin).intercept({ path, method: "GET" })
+    .reply(200, { catalogVersion: version, vulnerabilities: entries }, { headers: { "content-type": "application/json" } });
+  try {
+    serve("first");
+    assert.equal((await collectSource(id)).created, 1);
+    const [initial] = await sql`SELECT id,revision,body_text,backfill,backfill_reason FROM articles WHERE source_id=${id}`;
+    assert.equal(initial!.backfill_reason, "first-import");
+    serve("catalog metadata only");
+    assert.deepEqual(await collectSource(id), { sourceId: id, status: "ok", found: 1502, created: 0, revised: 0 });
+    assert.equal(await count(id), 1, "same-day entries present before onboarding are not live additions");
+    entries[0]!.requiredAction = "Apply the corrected vendor update and rotate exposed credentials.";
+    entries.push(entry(89999, today));
+    serve("new same-day CVE and per-CVE correction");
+    const changed = await collectSource(id);
+    assert.deepEqual([changed.created, changed.revised], [1, 1]);
+    assert.equal(await count(id), 2);
+    const [corrected] = await sql`SELECT revision,body_text FROM articles WHERE id=${initial!.id}`;
+    assert.equal(corrected!.revision, 2);
+    assert.match(corrected!.body_text, /rotate exposed credentials/);
+    serve("repeat");
+    assert.deepEqual([(await collectSource(id)).created, await count(id)], [0, 2]);
+  } finally { setGlobalDispatcher(previous); await agent.close(); }
+});
 
 test("the first import keeps its count and age limits; later runs take what was published since, and undated entries, before accepting 304", async () => {
   const rows = items("initial", 100);

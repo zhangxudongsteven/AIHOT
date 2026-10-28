@@ -6,6 +6,7 @@ import { fetchListing } from "./listing-fetch.ts";
 import { collapseWhitespace, stripTags } from "../lib/text.ts";
 import { readPublicationDate, type PublicationDate } from "./dates.ts";
 import { FetchError, type Candidate, type SourceRow } from "./types.ts";
+import { cisaKevCandidates, isCisaKevUrl } from "./cisa-kev.ts";
 
 export function getPath(obj: unknown, path: string): unknown {
   if (!path) return obj;
@@ -141,6 +142,7 @@ function embeddedJson(html: string, source: SourceRow): unknown {
 export async function fetchJsonList(source: SourceRow): Promise<Candidate[]> {
   const c = source.config;
   const url = String(c.url ?? "");
+  if (c.adapter === "cisa_kev" && !isCisaKevUrl(c.url)) throw new FetchError("CISA KEV requires its official catalog JSON or official GitHub mirror");
   const headers: Record<string, string> = { accept: "application/json, text/html;q=0.9", ...languageHeaders(c.acceptLanguage), ...(c.headers ?? {}) };
   if (/^https:\/\/api\.github\.com\//.test(url)) {
     const token = credential("collectors", "GITHUB_TOKEN");
@@ -166,6 +168,7 @@ export async function fetchJsonList(source: SourceRow): Promise<Candidate[]> {
       throw new FetchError("response is not JSON");
     }
   }
+  if (c.adapter === "cisa_kev") return cisaKevCandidates(data);
   let items = c.itemsPath ? getPath(data, c.itemsPath) : c.jsonKey ? getPath(data, c.jsonKey) : data;
   if (c.itemsObjectValues && items && typeof items === "object" && !Array.isArray(items)) items = Object.values(items);
   if (!Array.isArray(items)) throw new FetchError("items path did not resolve to an array");

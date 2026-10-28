@@ -70,6 +70,22 @@ function parseDate(v: string): Date | null {
   return Number.isFinite(t2) ? new Date(t2) : null;
 }
 
+function publicationDate(value: string, content: string, source: SourceRow) {
+  if (source.config.bodyAdapter === "msrc_csaf") return { publishedAt: null, publicationTime: null };
+  const published = readPublicationDate(value, source.config.publishedAtUtcOffset);
+  if (published.publishedAt || !source.config.publishedAtContentRegex) return published;
+  const match = new RegExp(source.config.publishedAtContentRegex).exec(stripTags(content));
+  return readPublicationDate(match?.[1], source.config.publishedAtUtcOffset);
+}
+
+function canonicalEntryUrl(original: string, content: string, source: SourceRow): string {
+  if (!source.config.itemUrlContentRegex) return original;
+  const captured = new RegExp(source.config.itemUrlContentRegex).exec(content)?.[1];
+  const url = URL.parse(captured ?? "");
+  if (!url || !["http:", "https:"].includes(url.protocol) || url.username || url.password) throw new FetchError("Entry URL content rule did not match a valid HTTP(S) address");
+  return url.href;
+}
+
 function atomLink(links: unknown, base: string): string {
   const list = arr(links as Record<string, string> | Array<Record<string, string>>);
   const alt = list.find((l) => typeof l === "object" && (!l["@rel"] || l["@rel"] === "alternate"));
@@ -186,11 +202,11 @@ export async function fetchRss(source: SourceRow, opts: { force?: boolean } = {}
       // An episode with no page (no <link>, a guid that is no address) links to its audio or video file,
       // which a browser plays. Its identity stays the one its guid gives, and it has no page to read a body from.
       const mediaFile = !page && guid ? enclosures.find((e) => /^(audio|video)\//.test(e?.["@type"] ?? ""))?.["@url"] ?? "" : "";
-      const link = page || mediaFile || guid;
-      const title = collapseWhitespace(stripTags(text(it.title)));
-      if (!link || !title) continue;
       const contentEncoded = text(it["content:encoded"]);
       const description = text(it.description);
+      const link = canonicalEntryUrl(page || mediaFile || guid, contentEncoded || description, source);
+      const title = collapseWhitespace(stripTags(text(it.title)));
+      if (!link || !title) continue;
       const video = isVideoPageUrl(link);
       const videoExcerpt = video ? mediaDescription(it) : null;
       const bodyHtmlRaw = contentEncoded || (summaryIsBody && !video ? description : "");
@@ -205,8 +221,9 @@ export async function fetchRss(source: SourceRow, opts: { force?: boolean } = {}
         ...(mediaFile ? { identityKey: identityKeyFor({ sourceId: source.id, url: guid, title, via: "fetch" }) } : {}),
         title,
         author: text(it["dc:creator"]) || text(it.author) || null,
-        ...readPublicationDate((text(it.pubDate) || text(it["dc:date"]) || text(it.published)).replace(/星期[一二三四五六日天]/, ""), source.config.publishedAtUtcOffset),
+        ...publicationDate((text(it.pubDate) || text(it["dc:date"]) || text(it.published)).replace(/星期[一二三四五六日天]/, ""), bodyHtmlRaw, source),
         ...feedText(bodyHtml, description ? stripTags(description) : null, source, !mediaFile && !video),
+        ...(source.config.bodyAdapter === "msrc_csaf" ? { sourceUpdatedAt: parseDate(text(it.pubDate)), bodyHtml: null, bodyText: null, bodyStatus: "pending" as const } : {}),
         ...(videoExcerpt ? { excerpt: videoExcerpt } : {}),
         media: media.slice(0, 6),
         categories: arr(it.category).map((c) => text(c)).filter(Boolean),
@@ -222,7 +239,7 @@ export async function fetchRss(source: SourceRow, opts: { force?: boolean } = {}
     const feedBase = new URL(feed["@xml:base"] ?? "", res.url).toString();
     for (const e of arr(feed.entry)) {
       const entryBase = new URL(e["@xml:base"] ?? "", feedBase).toString();
-      const entryUrl = atomLink(e.link, entryBase);
+      const entryUrl = canonicalEntryUrl(atomLink(e.link, entryBase), text(e.content) || text(e.summary), source);
       const title = collapseWhitespace(atomPlainText(e.title) ?? stripTags(text(e.title)));
       if (!entryUrl || !title) continue;
       const summary = text(e.summary) ? atomPlainText(e.summary) ?? stripTags(text(e.summary)) : null;
@@ -237,9 +254,10 @@ export async function fetchRss(source: SourceRow, opts: { force?: boolean } = {}
         title,
         author: text(arr(e.author)[0]?.name) || null,
         // Atom updated describes a revision, not the original publication.
-        ...readPublicationDate(text(e.published), source.config.publishedAtUtcOffset),
+        ...publicationDate(text(e.published), bodyHtmlRaw, source),
         sourceUpdatedAt: parseDate(text(e.updated)),
         ...feedText(bodyHtml, summary, source, !video, plainBody),
+        ...(source.config.bodyAdapter === "msrc_csaf" ? { bodyHtml: null, bodyText: null, bodyStatus: "pending" as const } : {}),
         ...(videoExcerpt ? { excerpt: videoExcerpt } : {}),
         media: bodyHtmlRaw ? imagesFrom(bodyHtmlRaw, entryUrl) : [],
         categories: arr(e.category).map((c: any) => c?.["@term"] ?? text(c)).filter(Boolean),

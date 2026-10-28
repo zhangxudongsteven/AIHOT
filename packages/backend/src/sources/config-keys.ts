@@ -2,20 +2,21 @@
 // know would otherwise fall back silently to the generic parse (menus and sentence fragments as
 // articles, dates never found).
 import type { SourceRow } from "./types.ts";
+import { isCisaKevUrl } from "./cisa-kev.ts";
 
 // Rules applied in collect.ts to every kind read through collectSource.
 const PUBLISHER = ["publisherRole", "publisherUrlPrefixes", "publisherRequiresDiscovery"];
 const COLLECTED = [...PUBLISHER, "_aihot", "allowUrlPrefixes", "denyUrlPrefixes", "ingestNoiseFilter", "itemUrlPrefixRewrite", "sortByPublishedAt", "detail", "fetchPublicContent", "publishedAfter", "acceptLanguage"];
 
 const KEYS: Record<SourceRow["kind"], string[]> = {
-  rss: [...COLLECTED, "feedUrl", "summaryIsBody", "preserveUrlFragment", "allowCategories", "denyCategories", "publishedAtUtcOffset"],
+  rss: [...COLLECTED, "feedUrl", "summaryIsBody", "preserveUrlFragment", "allowCategories", "denyCategories", "publishedAtUtcOffset", "publishedAtContentRegex", "itemUrlContentRegex", "bodyAdapter"],
   web_list: [
     ...COLLECTED, "url", "baseUrl", "parseMode", "adapter", "cacheToleranceSeconds", "linksStartLine", "preserveUrlFragment",
     "itemSelector", "linkSelector", "titleSelector", "publishedAtSelector", "publishedAtRegex", "publishedAtUtcOffset",
   ],
   json_list: [
-    ...COLLECTED, "url", "mode", "method", "headers", "bodyJson", "jsonKey", "windowVar", "itemsPath", "itemsObjectValues",
-    "titlePaths", "summaryPaths", "summaryIsBody", "authorPaths", "publishedAtPath", "publishedAtUnit", "publishedAtUtcOffset", "externalIdPath",
+    ...COLLECTED, "url", "adapter", "mode", "method", "headers", "bodyJson", "jsonKey", "windowVar", "itemsPath", "itemsObjectValues",
+    "titlePaths", "summaryPaths", "summaryIsBody", "authorPaths", "publishedAtPath", "publishedAtUnit", "publishedAtUtcOffset", "externalIdPath", "identityByExternalId",
     "urlTemplate", "urlTemplateFallback", "rawDropKeys", "requireBoolean", "minNumeric",
   ],
   // X accounts are mostly read in shards, which apply only these.
@@ -46,8 +47,8 @@ const preserveRules = (value: unknown) => Array.isArray(value) && value.every((r
 });
 
 const VALUES: Record<string, string[]> = {
+  bodyAdapter: ["msrc_csaf"],
   publisherRole: ["organization", "person"],
-  adapter: ["mimo_home"],
   parseMode: ["html", "markdown", "docusaurus_changelog", "intercom_changelog"],
 };
 
@@ -61,15 +62,25 @@ function utcInstant(value: unknown): boolean {
   return Number.isFinite(date.getTime()) && date.toISOString() === (value.includes(".") ? value : value.replace(/Z$/, ".000Z"));
 }
 
+function validRegex(value: unknown): boolean {
+  if (typeof value !== "string" || !value.trim()) return false;
+  try { new RegExp(value); return true; } catch { return false; }
+}
+
 /** The config entries a source of this kind would ignore or cannot run, e.g. ["adapter=site_cards", "detail.titleFoo"]. */
 export function unsupportedConfig(kind: SourceRow["kind"], config: Record<string, unknown>): string[] {
-  const allowed = new Set(KEYS[kind] ?? []);
+  const kev = kind === "json_list" && config.adapter === "cisa_kev";
+  const allowed = new Set(kev ? [...COLLECTED, "url", "adapter", "externalIdPath", "identityByExternalId"] : KEYS[kind] ?? []);
   const out: string[] = [];
   for (const [key, value] of Object.entries(config ?? {})) {
     if (!allowed.has(key)) out.push(key);
     else if (key === "publisherRequiresDiscovery" && (typeof value !== "boolean"
       || value && (!Array.isArray(config.publisherUrlPrefixes) || config.publisherUrlPrefixes.length === 0))) out.push(key);
     else if (key === "publishedAfter" && !utcInstant(value)) out.push(key);
+    else if ((key === "publishedAtContentRegex" || key === "itemUrlContentRegex") && !validRegex(value)) out.push(key);
+    else if (key === "adapter" && value !== (kind === "json_list" ? "cisa_kev" : "mimo_home")) out.push(`adapter=${String(value)}`);
+    else if (key === "identityByExternalId" && (typeof value !== "boolean" || value && (typeof config.externalIdPath !== "string" || !config.externalIdPath.trim()))) out.push(key);
+    else if (kev && key === "externalIdPath" && value !== "cveID") out.push(key);
     else if (key === "acceptLanguage" && (typeof value !== "string" || !ACCEPT_LANGUAGE.test(value))) out.push(key);
     else if (key === "publisherUrlPrefixes" && (!Array.isArray(value) || !value.every((v) => {
       if (typeof v !== "string") return false;
@@ -81,6 +92,7 @@ export function unsupportedConfig(kind: SourceRow["kind"], config: Record<string
       if (key === "detail" && "preserve" in value && !preserveRules((value as { preserve: unknown }).preserve)) out.push("detail.preserve");
     }
   }
+  if (kev && !isCisaKevUrl(config.url)) out.push("url");
   return out;
 }
 

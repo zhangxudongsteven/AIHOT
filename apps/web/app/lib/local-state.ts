@@ -4,7 +4,7 @@ import { browserSpace, unscopedPath, spaceSlug } from "./space-path.ts";
 // keys and formats once readers have data under them: existing readers' data must stay readable as-is.
 // Storage failures degrade silently.
 import { useEffect, useMemo, useSyncExternalStore } from "react";
-import { beijingDate } from "@aihot/contracts/time";
+import { beijingDate, isValidDate } from "@aihot/contracts/time";
 
 export const KEYS = {
   starred: "aihot-starred-items",
@@ -37,6 +37,7 @@ export interface LocalStarredItem {
   sourceName: string;
   savedAt: string;
   publishedAt: string | null;
+  publicationTime?: string | null;
   score: number | null;
   aiSelected: boolean;
 }
@@ -172,6 +173,8 @@ function normalizeStarred(v: Record<string, unknown>): LocalStarredItem {
     sourceName: typeof v.sourceName === "string" ? v.sourceName : "",
     savedAt: isDisplayableDate(v.savedAt) ? v.savedAt : new Date().toISOString(),
     publishedAt: isDisplayableDate(v.publishedAt) ? v.publishedAt : null,
+    publicationTime: typeof v.publicationTime === "string" && (isValidDate(v.publicationTime)
+      || /^\d{4}-\d{2}-\d{2}T/.test(v.publicationTime) && isDisplayableDate(v.publicationTime)) ? v.publicationTime : null,
     score: typeof v.score === "number" ? v.score : null,
     aiSelected: v.aiSelected === true,
   };

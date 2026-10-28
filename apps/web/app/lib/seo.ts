@@ -6,6 +6,7 @@ import type { MetaDescriptor } from "react-router";
 import { REPORT_NAMES, reportDateLabel, type ReportDetail, type SiteMeta, type StoryDetail, type TimelineFilters } from "@aihot/contracts/site";
 import { CATEGORY_KEYS, isChannelKey } from "@aihot/contracts/taxonomy";
 import { SITE, subjectAfter, withSubject } from "@aihot/site";
+import { publicationValue } from "./format.ts";
 
 /**
  * The site's address: SITE_URL while rendering on the server (what crawlers and share previews read),
@@ -258,8 +259,10 @@ export function storyLd(story: StoryDetail) {
   const base = siteUrl();
   const url = `${base}/story/${story.publicId}`;
   const description = story.digest ?? story.summary ?? story.excerpt?.text;
-  const updated = [story.latestAt, story.digest ? story.digestUpdatedAt : null]
-    .filter((at): at is string => !!at).sort((a, b) => Date.parse(b) - Date.parse(a))[0];
+  const digestUpdatedAt = story.digest ? story.digestUpdatedAt : null;
+  const updated = digestUpdatedAt && (!story.latestAt || Date.parse(digestUpdatedAt) >= Date.parse(story.latestAt))
+    ? digestUpdatedAt
+    : story.latestAt ? publicationValue(story.latestAt, story.latestTime) : undefined;
   const reports = [...story.timeline].sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt));
   return {
     "@context": "https://schema.org",

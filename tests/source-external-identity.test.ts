@@ -8,7 +8,7 @@ import { config } from "@aihot/backend/config";
 import { closeDb, sql } from "@aihot/backend/db";
 import { stopBoss } from "@aihot/backend/jobs/queue";
 import { collectSource } from "@aihot/backend/sources/collect";
-import { upsertMaterial } from "@aihot/backend/content/materials";
+import { reuseExternalMaterialIdentities, upsertMaterial } from "@aihot/backend/content/materials";
 import { defaultSpaceConfig, storeSpaceConfig } from "@aihot/backend/spaces/context";
 import { cutoverSpaceIdentity } from "../scripts/space-cutover.ts";
 
@@ -81,4 +81,51 @@ test("the same listing in two spaces keeps separate articles, cursors and fetch 
   assert.equal((await collectSource(b!.id, { force: true })).status, "skipped", "legacy collection cannot resolve another space's source");
   const runs = await sql`SELECT DISTINCT space_id, source_id FROM fetch_runs WHERE source_id IN ${sql(sources.map((s) => s.id))} ORDER BY space_id`;
   assert.deepEqual(runs.map((r) => [r.space_id, r.source_id]), sources.map((s) => [s.context.spaceId, s.id]));
+});
+
+test("a JSON source can explicitly keep two external entries sharing one URL and retain them after a URL rename", async () => {
+  const sourceId = `test-external-distinct-${T}`;
+  const otherSourceId = `${sourceId}-other`;
+  for (const id of [sourceId, otherSourceId]) {
+    await sql`INSERT INTO sources (id,name,kind,config,tier,participation_mode)
+      VALUES (${id},${id},'json_list','{}','T2','hot_signal')`;
+  }
+  const sharedUrl = `https://example.org/${sourceId}/shared-advisory`;
+  const entries = ["CVE-2023-2727", "CVE-2023-2728"].map(id => ({
+    url: sharedUrl, title: `${id} vulnerability notice`, publishedAt: new Date(published), raw: { externalId: id },
+  }));
+  const distinct = await reuseExternalMaterialIdentities(sourceId, entries, sql, "default", { identityByExternalId: true });
+  for (const entry of distinct) await upsertMaterial({ ...entry, sourceId, via: "fetch" });
+  const before = await sql<{ id: string; external_id: string }[]>`SELECT id,raw->>'externalId' AS external_id FROM articles
+    WHERE source_id=${sourceId} ORDER BY raw->>'externalId'`;
+  assert.deepEqual(before.map(row => row.external_id), ["CVE-2023-2727", "CVE-2023-2728"]);
+  assert.equal(new Set(before.map(row => row.id)).size, 2);
+  const renamed = await reuseExternalMaterialIdentities(sourceId, entries.map(entry => ({ ...entry, title: `${entry.title} updated`, url: `${sharedUrl}-renamed` })), sql, "default", { identityByExternalId: true });
+  for (const entry of renamed) assert.equal((await upsertMaterial({ ...entry, sourceId, via: "fetch" })).created, false);
+  const after = await sql<{ id: string; title: string }[]>`SELECT id,title FROM articles WHERE source_id=${sourceId} ORDER BY raw->>'externalId'`;
+  assert.deepEqual(after.map(row => row.id), before.map(row => row.id));
+  assert.ok(after.every(row => row.title.endsWith("updated")));
+  const other = await reuseExternalMaterialIdentities(otherSourceId, [entries[0]!], sql, "default", { identityByExternalId: true });
+  assert.equal((await upsertMaterial({ ...other[0]!, sourceId: otherSourceId, via: "fetch" })).created, true);
+});
+
+test("enabling external entry identity retains an already stored URL identity", async () => {
+  const sourceId = `test-external-optin-existing-${T}`;
+  await sql`INSERT INTO sources (id,name,kind,config,tier,participation_mode)
+    VALUES (${sourceId},${sourceId},'json_list','{}','T2','hot_signal')`;
+  const original = { url: `https://example.org/${sourceId}/old`, title: "Existing advisory", publishedAt: new Date(published), raw: { externalId: "known" } };
+  const initial = await upsertMaterial({ ...original, sourceId, via: "fetch" });
+  const [renamed] = await reuseExternalMaterialIdentities(sourceId, [{ ...original, url: `https://example.org/${sourceId}/new` }], sql, "default", { identityByExternalId: true });
+  const result = await upsertMaterial({ ...renamed!, sourceId, via: "fetch" });
+  assert.equal(result.created, false);
+  assert.equal(result.articleId, initial.articleId);
+  assert.equal((await sql`SELECT id FROM articles WHERE source_id=${sourceId}`).length, 1);
+});
+
+test("external entry identity rejects a missing or unusable ID while ordinary URL sources keep their current behavior", async () => {
+  for (const value of [undefined, null, "", "   ", {}, Number.NaN, Number.POSITIVE_INFINITY]) {
+    const entries = [{ raw: { externalId: value } }];
+    await assert.rejects(reuseExternalMaterialIdentities(`test-invalid-${T}`, entries, sql, "default", { identityByExternalId: true }), /external ID/i);
+    assert.deepEqual(await reuseExternalMaterialIdentities(`test-invalid-${T}`, entries), entries);
+  }
 });

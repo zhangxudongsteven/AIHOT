@@ -10,7 +10,8 @@ import { ITEM_COPY, SITE } from "@aihot/site";
 import { cachedPage, loadOr404 } from "../lib/api.server";
 import { pageReuse } from "../lib/page-reuse";
 import { articleLd, breadcrumbLd, pageMeta, siteUrl, titled } from "../lib/seo";
-import { fullDateTime, relativeTime } from "../lib/format";
+import { fullDateTime, publicationValue, relativeTime } from "../lib/format";
+import { isValidDate } from "@aihot/contracts/time";
 import { markRead } from "../lib/local-state";
 import { copyText } from "../lib/clipboard";
 import { SameEventBadge, SelectedBadge } from "../components/ui/Badge";
@@ -70,7 +71,7 @@ function routeMeta({ loaderData }: Route.MetaArgs) {
     type: "article",
     noindex: !item.indexable,
     jsonLd: [
-      articleLd({ path: `/items/${item.id}`, headline: item.title, description: item.summary, publishedAt: item.publishedAt, image: `/og/items/${item.id}.png`, basedOn: item.links.original }),
+      articleLd({ path: `/items/${item.id}`, headline: item.title, description: item.summary, publishedAt: item.publishedAt ? publicationValue(item.publishedAt, item.publicationTime) : null, image: `/og/items/${item.id}.png`, basedOn: item.links.original }),
       breadcrumbLd([
         { name: SITE.name, path: "/" },
         { name: item.selected ? "精选" : "全部动态", path: item.selected ? "/" : "/all" },
@@ -209,7 +210,7 @@ function ItemPreview({ preview }: { preview: FeedItemSummary }) {
   const [toast, setToast] = useToast();
   const isX = preview.channel === "x" && !!preview.x;
   // Without a reliable date from the original, the card's time is when it was collected, and says so.
-  const shownAt = preview.publishedAt ?? preview.timelineAt;
+  const shownAt = preview.publishedAt ? publicationValue(preview.publishedAt, preview.publicationTime) : preview.timelineAt;
   return (
     <div className="mx-auto max-w-[var(--page-max-reading)] pb-8">
       <PhoneBar back={{ to: preview.selected ? "/" : "/all", label: preview.selected ? "精选" : "全部" }} title={isX ? preview.x!.authorName : preview.title} />
@@ -323,7 +324,8 @@ function ItemView({ item }: { item: SiteItemDetail }) {
   const bodyLabel = !item.body ? null : lang === "zh" && item.body.zhKind === "translation" ? "正文 · AI 翻译" : lang === "original" ? "正文 · 原文" : "正文";
   const isX = item.channel === "x" && !!item.x;
   // Without a reliable date from the original, the time shown is when it was collected, labelled as such.
-  const shownAt = item.publishedAt ?? item.discoveredAt;
+  const shownAt = item.publishedAt ? publicationValue(item.publishedAt, item.publicationTime) : item.discoveredAt;
+  const showRelativeTime = !isValidDate(shownAt);
   const timeLabel = item.publishedAt ? "发布时间" : "收录时间";
   const summaryOnly = item.readingMode === "summary-only";
   const showOutline = item.outline.length >= 3;
@@ -404,9 +406,9 @@ function ItemView({ item }: { item: SiteItemDetail }) {
       <time dateTime={shownAt} className="mono mt-0.5 block text-[12.5px] text-ink-2">
         {fullDateTime(shownAt)}
       </time>
-      <div className="mt-0.5 text-[12px] text-ink-4" suppressHydrationWarning>
+      {showRelativeTime && <div className="mt-0.5 text-[12px] text-ink-4" suppressHydrationWarning>
         {relativeTime(shownAt)}
-      </div>
+      </div>}
     </RailSection>
   );
   const outline = showOutline && <ArticleOutline outline={item.outline} />;
@@ -487,7 +489,7 @@ function ItemView({ item }: { item: SiteItemDetail }) {
             <span>·</span>
             {!item.publishedAt && <span>收录于</span>}
             <time dateTime={shownAt} className="mono">{fullDateTime(shownAt)}</time>
-            <span suppressHydrationWarning>· {relativeTime(shownAt)}</span>
+            {showRelativeTime && <span suppressHydrationWarning>· {relativeTime(shownAt)}</span>}
             {item.selected && (
               <span className="ml-1 lg:hidden">
                 {item.sameEvent ? <SameEventBadge /> : <SelectedBadge />}

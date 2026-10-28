@@ -84,7 +84,7 @@ function TopicCard({ t }: { t: TopicSummary }) {
           {t.latest?.title ?? t.definition}
         </span>
         <span className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11.5px] text-ink-4 lg:mt-3 lg:justify-between">
-          {t.latest && <time dateTime={t.latest.at} suppressHydrationWarning>{relativeTime(t.latest.at)}</time>}
+          {t.latest && <time dateTime={t.latest.time ?? t.latest.at} suppressHydrationWarning>{relativeTime(t.latest.time ?? t.latest.at)}</time>}
           <span>
             {t.recent > 0 ? (
               <>

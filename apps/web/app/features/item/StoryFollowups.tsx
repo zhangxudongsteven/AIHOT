@@ -60,7 +60,7 @@ function Followups({items, more, story}: {items: StoryFollowup[]; more: boolean;
                 <span className="min-w-0 text-[13.5px] leading-snug text-ink-2 group-hover:text-accent sm:truncate">{d.representative.title}</span>
               </span>
               <span className="shrink-0 pl-[46px] text-[12px] text-ink-4 sm:pl-0" suppressHydrationWarning>
-                {d.representative.source.name} · {relativeTime(d.representative.timelineAt)}
+                {d.representative.source.name} · {relativeTime(d.representative.timelineTime ?? d.representative.timelineAt)}
               </span>
             </Link>
           </li>

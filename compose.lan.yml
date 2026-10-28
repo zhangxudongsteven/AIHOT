@@ -9,7 +9,7 @@ x-app: &app
 
 x-backend: &backend
   <<: *app
-  # Explicit allowlist: local development bypasses and external-service credentials stay out.
+  # Explicit allowlist: backend credentials stay here; development bypasses stay out.
   environment: &backend-env
     NODE_ENV: production
     AIHOT_ENVIRONMENT: development
@@ -25,12 +25,18 @@ x-backend: &backend
     SESSION_SECRET: ${SESSION_SECRET:?Set a server-specific SESSION_SECRET}
     IMG_PROXY_SIGN_SECRET: ${IMG_PROXY_SIGN_SECRET:?Set a server-specific IMG_PROXY_SIGN_SECRET}
     LOG_LEVEL: ${LOG_LEVEL:-info}
+    LLM_BASE_URL: ${LLM_BASE_URL:-}
+    LLM_API_KEY: ${LLM_API_KEY:-}
+    LLM_MODEL: ${LLM_MODEL:-}
+    LLM_VISION: ${LLM_VISION:-false}
+    FEISHU_PUSH_WEBHOOK_URL: ${FEISHU_PUSH_WEBHOOK_URL:-}
+    FEISHU_SECURITY_WEBHOOK_URL: ${FEISHU_SECURITY_WEBHOOK_URL:-}
     TRUST_PROXY: "false"
     ALLOW_PRIVATE_NETWORK_FETCH: "false"
-    # These are intentionally literal: shell or dotenv values cannot enable external actions.
-    COLLECT_ENABLED: "false"
-    MODEL_CALLS_ENABLED: "false"
-    FEISHU_CONTENT_PUSH_ENABLED: "false"
+    # Collection, model calls and content push require explicit configuration.
+    COLLECT_ENABLED: ${COLLECT_ENABLED:-false}
+    MODEL_CALLS_ENABLED: ${MODEL_CALLS_ENABLED:-false}
+    FEISHU_CONTENT_PUSH_ENABLED: ${FEISHU_CONTENT_PUSH_ENABLED:-false}
     FEISHU_INTERNAL_ENABLED: "false"
     INDEXNOW_SUBMIT_ENABLED: "false"
   volumes:

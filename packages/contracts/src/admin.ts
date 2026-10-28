@@ -148,7 +148,7 @@ export type AdminSourceCreated =
 export interface AdminSourcePreview {
   ms: number;
   count: number;
-  items: Array<{ title: string; url: string; publishedAt: Timestamp | null; excerpt: string }>;
+  items: Array<{ title: string; url: string; publishedAt: Timestamp | null; publicationTime?: string | null; excerpt: string }>;
 }
 
 // Content and events
@@ -210,7 +210,7 @@ export interface AdminPublication {
 export interface AdminContentChain {
   article: {
     id: string; source_id: string; url: string; identity_key: string; title: string; author: string | null; language: string | null;
-    published_at: Timestamp | null; published_at_claim: string | null; discovered_at: Timestamp; timeline_at: Timestamp; backfill: boolean;
+    published_at: Timestamp | null; publication_time?: string | null; published_at_claim: string | null; discovered_at: Timestamp; timeline_at: Timestamp; backfill: boolean;
     body_status: string; revision: number; processing_state: string; processing_error: string | null; grouped_at: Timestamp | null; body_chars: number | null;
     source_name: string; source_kind: string; tier: string; participation_mode: string; site_fulltext: boolean; syndicate_fulltext: boolean;
   };

@@ -9,6 +9,7 @@ import { stripTagMarkup } from "../lib/text.ts";
 import { proxyBodyImages } from "../media/imgproxy.ts";
 import { textToHtml } from "../content/sanitize.ts";
 import { exportTranslation, isChineseBody, ITEM_COLUMNS, ITEM_FROM, seatHolders, showsPost, toItemSummary, xView, type ItemRow } from "./items.ts";
+import { isValidDate } from "@aihot/contracts/time";
 import { evidenceCondition, listedCondition } from "./scope.ts";
 import { itemUrl, siteUrl } from "./links.ts";
 import { hasItemPage, publicSourceName } from "./rules.ts";
@@ -188,7 +189,8 @@ export async function exportMarkdown(id: string): Promise<{ filename: string; bo
   if (row.original_title) lines.push(`> 原标题：${row.original_title}`, "");
   lines.push(`- 来源：${publicSourceName(row.source_name)}`);
   // Without a reliable date from the original, the time it was collected says so.
-  lines.push(row.published_at ? `- 发布时间：${row.published_at.toISOString()}` : `- 收录时间：${row.discovered_at.toISOString()}`);
+  const publishedTime = row.published_at && isValidDate(row.publication_time ?? "") ? row.publication_time : row.published_at?.toISOString();
+  lines.push(row.published_at ? `- 发布时间：${publishedTime}` : `- 收录时间：${row.discovered_at.toISOString()}`);
   lines.push(`- ${publicationSpace()?.name ?? publicationConfig()?.siteName ?? SITE.name}：${itemUrl(row.id)}`);
   lines.push(`- 原文：${row.url}`, "");
   if (row.summary) lines.push("## 摘要", "", row.summary, "");

@@ -1,0 +1,19 @@
+# Use only with compose.lan.yml and --project-name myhot-staging.
+name: myhot-staging
+services:
+  setup:
+    image: myhot-staging-app:${AIHOT_RELEASE:?Set a staging release}
+  api:
+    image: myhot-staging-app:${AIHOT_RELEASE:?Set a staging release}
+    mem_limit: 512m
+    cpus: 1
+  worker:
+    image: myhot-staging-app:${AIHOT_RELEASE:?Set a staging release}
+    mem_limit: 512m
+    cpus: 1
+  web:
+    image: myhot-staging-app:${AIHOT_RELEASE:?Set a staging release}
+    mem_limit: 512m
+    cpus: 1
+    ports: !override
+      - "127.0.0.1:3200:3000"

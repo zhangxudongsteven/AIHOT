@@ -56,6 +56,12 @@ test("stored bookmarks with damaged dates remain readable, exportable and remova
   assert.deepEqual(state.getStarred(), []);
 });
 
+test("bookmark storage and export retain the original publication precision", async () => {
+  const { state } = await reader([{ id: "calendar-source", title: "日期公告", savedAt: "2026-10-27T08:30:00.000Z", publishedAt: "2026-10-26T00:00:00.000Z", publicationTime: "2026-10-26" }]);
+  assert.equal(state.getStarred()[0]?.publicationTime, "2026-10-26");
+  assert.equal(state.exportBundle().starred[0]?.publicationTime, "2026-10-26");
+});
+
 test("valid dates are preserved and an import cannot replace an existing bookmark", async () => {
   const existing = { id: "valid", title: "Original", savedAt: "2026-09-29T08:30:00+08:00", publishedAt: "2026-09-28T23:00:00Z" };
   const { state } = await reader([existing]);

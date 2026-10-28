@@ -9,7 +9,9 @@ import "./setup.ts";
 import assert from "node:assert/strict";
 import http from "node:http";
 import { after, test } from "node:test";
+import { MockAgent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import { config } from "@aihot/backend/config";
+import { identityKeyForUrl } from "@aihot/backend/lib/url";
 import { extractFromUrl, pageRules } from "@aihot/backend/content/extract";
 import { sanitizeBody, trimTrailingChrome } from "@aihot/backend/content/sanitize";
 import { unsupportedConfig } from "@aihot/backend/sources/config-keys";
@@ -19,6 +21,33 @@ import { fetchJsonList } from "@aihot/backend/sources/json-list";
 import { noiseFiltered } from "@aihot/backend/sources/filters";
 
 const source = (config: Record<string, unknown>) => ({ id: "test-list", config }) as never;
+
+const KEV_PATH = "/sites/default/files/feeds/known_exploited_vulnerabilities.json";
+const kevEntry = {
+  cveID: "CVE-2026-12345", vendorProject: "Example Vendor", product: "Example Gateway",
+  vulnerabilityName: "Example Gateway authentication bypass", dateAdded: "2026-10-26",
+  shortDescription: "An unauthenticated attacker can bypass access controls on Example Gateway.",
+  requiredAction: "Apply the vendor update or discontinue use if no mitigation is available.",
+  dueDate: "2026-11-16", knownRansomwareCampaignUse: "Unknown",
+  notes: "The vendor advisory describes affected releases and the available fix.",
+};
+
+async function kevItems(data: unknown, extra: Record<string, unknown> = {}) {
+  const previousDispatcher = getGlobalDispatcher();
+  const previousProxy = config.egressProxyUrl;
+  const agent = new MockAgent();
+  agent.disableNetConnect();
+  setGlobalDispatcher(agent);
+  config.egressProxyUrl = null;
+  agent.get("https://www.cisa.gov").intercept({ path: KEV_PATH }).reply(200, JSON.stringify(data), { headers: { "content-type": "application/json" } });
+  try {
+    return await fetchJsonList(source({ url: `https://www.cisa.gov${KEV_PATH}`, adapter: "cisa_kev", ...extra }));
+  } finally {
+    config.egressProxyUrl = previousProxy;
+    setGlobalDispatcher(previousDispatcher);
+    await agent.close();
+  }
+}
 
 const pages: Record<string, () => string> = {
   // A news site's feed: a teaser that ends in "Read the full story", next to a post whose feed carries it whole.
@@ -247,6 +276,58 @@ test("dates in yyyymmdd and in JSON-LD are read", async () => {
   const got = await fetchDetail(`${site}/ld-post`, { id: "test-feed", config: { detail: { maxFetches: 20 } } } as never, { date: true, title: false, summary: false, body: false });
   assert.equal(got.publishedAt?.toISOString(), "2026-09-23T16:00:00.000Z");
   assert.equal(got.publicationTime, "2026-09-24");
+});
+
+test("CISA KEV JSON gives each CVE its own explicitly dated catalog addition", async () => {
+  const items = await kevItems({ vulnerabilities: [kevEntry, { ...kevEntry, cveID: "CVE-2026-54321" }] });
+  assert.equal(items.length, 2, "the catalog is a list of CVEs, not one article");
+  for (const [index, cve] of ["CVE-2026-12345", "CVE-2026-54321"].entries()) {
+    const item = items[index]!;
+    assert.match(item.title, /KEV/);
+    assert.ok(item.title.includes(cve));
+    assert.match(item.title, /add|inclus|收录|加入|纳入/i, "the title describes the KEV addition event");
+    assert.equal(item.url, `https://www.cisa.gov/known-exploited-vulnerabilities-catalog?field_cve=${cve}`);
+    assert.equal((item.raw as { externalId?: unknown })?.externalId, cve);
+    assert.equal(item.bodyStatus, "ok");
+    assert.equal(item.publishedAt?.toISOString(), "2026-10-26T00:00:00.000Z");
+    assert.equal(item.publicationTime, "2026-10-26");
+    const body = item.bodyText ?? "";
+    for (const fact of [cve, kevEntry.vendorProject, kevEntry.product, kevEntry.vulnerabilityName, kevEntry.dateAdded, kevEntry.shortDescription, kevEntry.requiredAction, kevEntry.dueDate, kevEntry.knownRansomwareCampaignUse, kevEntry.notes]) {
+      assert.ok(body.includes(fact), `the confirmed body retains ${fact}`);
+    }
+    assert.match(body, /(?:not|不|非)[^\n]*(?:first|initial|original|首次|首发)/i, "KEV dateAdded must not claim the CVE's first disclosure");
+    assert.match(body, /FCEB|federal civilian|联邦文职/i, "the due date has its applicable audience");
+    assert.match(body, /(?:not|不|非)[^\n]*(?:all organi[sz]ations|every organi[sz]ation|所有组织)/i, "the due date is not presented as mandatory for everyone");
+    assert.match(body, /Unknown[^\n]*(?:not|不|非)|(?:not|不|非)[^\n]*(?:unexploited|未.*利用)/i, "Unknown ransomware use does not mean the vulnerability is unexploited");
+  }
+  assert.notEqual(items[0]!.url, items[1]!.url, "the same vulnerability name never collapses distinct CVEs");
+  assert.notEqual(identityKeyForUrl(items[0]!.url), identityKeyForUrl(items[1]!.url), "the CVE query remains part of material identity");
+});
+
+test("CISA KEV rejects or filters entries that lack a CVE, a real calendar day or a description", async () => {
+  for (const patch of [
+    { cveID: "" }, { cveID: undefined }, { cveID: "not-a-cve" }, { dateAdded: "2026-02-30" }, { dateAdded: "2026-13-01" },
+    { dateAdded: "2026-10-26T00:00:00Z" }, { dateAdded: "" }, { shortDescription: "" }, { shortDescription: undefined },
+  ]) {
+    let result;
+    try { result = await kevItems({ vulnerabilities: [{ ...kevEntry, ...patch }] }); }
+    catch (error) {
+      assert.match((error as Error).message, /CVE|date|description|entry|catalog|KEV|invalid|incomplete|missing/i);
+      continue;
+    }
+    assert.deepEqual(result, [], `an invalid entry is never confirmed as a body: ${JSON.stringify(patch)}`);
+  }
+});
+
+test("ordinary JSON field mappings do not implicitly become CISA KEV events", async () => {
+  const [item] = await kevItems({ vulnerabilities: [kevEntry] }, {
+    adapter: undefined, itemsPath: "vulnerabilities", titlePaths: ["vulnerabilityName"], summaryPaths: ["shortDescription"],
+    summaryIsBody: true, externalIdPath: "cveID", urlTemplate: "https://example.org/{cveID}",
+    publishedAtPath: "dateAdded", publishedAtUtcOffset: "+00:00",
+  });
+  assert.equal(item?.title, kevEntry.vulnerabilityName);
+  assert.equal(item?.bodyText, kevEntry.shortDescription);
+  assert.equal(item?.url, "https://example.org/CVE-2026-12345");
 });
 
 test("a source's language reaches its listing, detail page and article body, which stay in that language", async () => {

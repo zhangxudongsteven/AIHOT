@@ -2,6 +2,7 @@ import { publicationSpaceId, publicationSpace, publicationCacheKey } from "./con
 // Stories (events) and the hot ranking through the public read layer. The website sees heat values;
 // v1 and MCP only see ranks and counts.
 import type { HeatPoint, HotResponse, StoryDetail, StoryReportView } from "@aihot/contracts/site";
+import { isValidDate } from "@aihot/contracts/time";
 import { SITE } from "@aihot/site";
 import { sql } from "../db.ts";
 import { shared } from "../lib/cache.ts";
@@ -60,6 +61,7 @@ interface ReportRow extends RepresentativeIdentity {
   url: string;
   selected: boolean;
   at: Date;
+  publication_time: string | null;
   source_id: string;
   source_name: string;
   first_party: boolean;
@@ -75,11 +77,12 @@ interface ReportRow extends RepresentativeIdentity {
 async function storyReports(storyId: number, now: Date): Promise<ReportRow[]> {
   return sql<ReportRow[]>`
     SELECT DISTINCT ON (p.article_id) p.article_id AS id, p.title, p.summary, p.url, p.selected,
-      coalesce(p.published_at, p.discovered_at) AS at, s.id AS source_id, s.name AS source_name,
+      coalesce(p.published_at, p.discovered_at) AS at,
+      CASE WHEN p.published_at IS NOT NULL THEN a.publication_time END AS publication_time, s.id AS source_id, s.name AS source_name,
       (s.tier = 'T1') AS first_party, f.id AS fact_id,
       CASE WHEN ${compositeCondition()} THEN 'mention' ELSE fa.role END AS role, p.body_mode, p.score, p.timeline_at, ${REPRESENTATIVE_COLUMNS}
     FROM facts f JOIN fact_articles fa ON fa.fact_id = f.id JOIN publications p ON p.article_id = fa.article_id
-    JOIN sources s ON s.id = p.source_id
+    JOIN sources s ON s.id = p.source_id JOIN articles a ON a.id = p.article_id
     WHERE f.story_id = ${storyId} AND ${storyReportCondition(now)}
     ORDER BY p.article_id, (fa.role = 'primary') DESC, (fa.role <> 'mention') DESC, f.id`;
 }
@@ -91,8 +94,13 @@ function reportView(r: ReportRow): StoryReportView {
     summary: r.summary,
     source: { name: publicSourceName(r.source_name), firstParty: r.first_party },
     publishedAt: r.at.toISOString(),
+    publicationTime: r.publication_time,
     selected: r.selected,
   };
+}
+
+function reportTime(r: Pick<ReportRow, "at" | "publication_time">): string {
+  return isValidDate(r.publication_time ?? "") ? r.publication_time! : r.at.toISOString();
 }
 
 /** The story's reports newest first, its developments, and its latest and first non-mention reports. */
@@ -114,15 +122,16 @@ async function storyContent(storyId: number, now: Date) {
       const members = byFact.get(f.id)!;
       const selected = members.filter((r) => r.selected);
       const rep = pickRepresentative(selected.length ? selected : members);
-      const first = members.reduce((m, r) => (r.at < m ? r.at : m), members[0]!.at);
-      return { factId: f.public_id, title: f.title, firstReportAt: first.toISOString(), reportCount: members.length, representative: rep };
+      const first = members.reduce((m, r) => (r.at < m.at ? r : m), members[0]!);
+      return { factId: f.public_id, title: f.title, firstReportAt: first.at.toISOString(), firstReportTime: reportTime(first), reportCount: members.length, representative: rep };
     })
     .sort((a, b) => Date.parse(b.firstReportAt) - Date.parse(a.firstReportAt));
 
   const latestReport = primaryReports[0];
   if (!latestReport) return null;
   const firstReportAt = primaryReports[primaryReports.length - 1]!.at;
-  return { s, reports, primaryReports, developments, latestReport, firstReportAt };
+  const firstReportTime = reportTime(primaryReports[primaryReports.length - 1]!);
+  return { s, reports, primaryReports, developments, latestReport, firstReportAt, firstReportTime };
 }
 
 async function relatedStories(storyId: number, now: Date) {
@@ -144,7 +153,7 @@ async function relatedStories(storyId: number, now: Date) {
 export async function loadStoryDetail(storyId: number, now = new Date()): Promise<StoryDetail | null> {
   const content = await storyContent(storyId, now);
   if (!content) return null;
-  const { s, reports, developments, latestReport, firstReportAt } = content;
+  const { s, reports, developments, latestReport, firstReportAt, firstReportTime } = content;
   const [why] = await sql<{ p48: number; p6: number; r24: number }[]>`
     WITH cs AS (SELECT * FROM ${currentSignals(publicationSpaceId())} c WHERE story_id = ${storyId} AND observed_at <= ${now})
     SELECT count(DISTINCT participant_key) FILTER (WHERE observed_at > ${now}::timestamptz - interval '48 hours') AS p48,
@@ -178,7 +187,9 @@ export async function loadStoryDetail(storyId: number, now = new Date()): Promis
     reportCount: reports.length,
     sourceCount: new Set(reports.map((r) => r.source_id)).size,
     firstReportAt: firstReportAt.toISOString(),
+    firstReportTime,
     latestAt: latestAt.toISOString(),
+    latestTime: reportTime(reports.find((r) => r.id === latest.id) ?? { at: latestAt, publication_time: null }),
     digest: text.digest,
     digestUpdatedAt: text.digestUpdatedAt?.toISOString() ?? null,
     summary: text.summary,

@@ -1,5 +1,8 @@
 # MacBook Pro 单机部署：原生 PostgreSQL + 应用 Compose
 
+本机实际运行状态及隔离 staging 操作见 [staging 部署](staging-deployment.md)；
+该环境使用独立分支、数据库、账号、卷、网络和 3200 端口。
+
 更新：2026-10-23。当前短期目标是应用与数据库都运行在同一台 MacBook Pro，**PostgreSQL 独立安装和管理，不纳入 Compose**。长期迁移路线见 [GCP 部署方案](gcp-deployment-plan.md)。本文和配置模板已准备，尚未在目标 MacBook Pro 安装数据库或完成容器部署。
 
 ## 1. 运行边界
@@ -81,7 +84,9 @@ PORT=127.0.0.1:3100
 
 `PGPASSWORD` 单独填写，不拼入 URL。默认网站仅供本机验证；给公司局域网访问时，将 `SITE_URL` 改成 `http://<Mac固定局域网IP>:<可用端口>`，将 `PORT` 改成同一个 `<IP>:<端口>`，并核验主机防火墙。网站地址不能使用 `host.docker.internal`。容器内仍由 Web 监听 3000、API 监听 3001，数据库地址不随网站地址改变。
 
-当前 Compose 中采集、模型、飞书和 IndexNow 固定为关闭，且不传入相关凭据；更改环境文件不会开启它们。先验收单机运行，后续再修改部署白名单、开关及配额，逐项验证真实业务。
+采集、模型调用和内容推送默认关闭，完成验证后可分别在私有环境文件显式设置 `COLLECT_ENABLED=true`、`MODEL_CALLS_ENABLED=true`、`FEISHU_CONTENT_PUSH_ENABLED=true` 并重建 API/worker。模型使用 `LLM_BASE_URL`、`LLM_API_KEY`、`LLM_MODEL`、`LLM_VISION`，已有频道还需同步活动模型配置快照。内容推送另需 `FEISHU_PUSH_WEBHOOK_URL` 及启用的频道通知目标；T2 信源与首次历史导入不会自动推送精选。模型和群机器人凭据仅传入后端，飞书内部通知及 IndexNow 保持关闭。启用模型后，已有待处理内容可能由定时任务调用模型。
+
+安全频道通知目标使用独立的 `configRef: "FEISHU_SECURITY_WEBHOOK_URL"`，默认频道仍用 `FEISHU_PUSH_WEBHOOK_URL`。两个频道发往同一群时，在私有环境文件中为两个变量配置同一 webhook；引用名称分别保留，通知订阅和投递记录仍按频道隔离。该变量只传入后端，Web 不接收。
 
 ## 5. 部署与验证
 

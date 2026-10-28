@@ -39,6 +39,10 @@
 
 可选：`summaryIsBody`（确认文字订阅里的摘要就是全文时，将 RSS 的 `description`、Atom 的 `summary` 当正文，不再去抓原文页）、`allowCategories` / `denyCategories`（按订阅里的分类过滤）。
 
+单页公告按锚点分别发布时，设置 `preserveUrlFragment:true`，避免不同章节被判成同一篇。Google Cloud Security Bulletins 的 Atom 只有修订时间；可显式设置 `publishedAtContentRegex:"Published:\\s*(\\d{4}-\\d{2}-\\d{2})"` 和 `publishedAtUtcOffset:"+00:00"`，从每条正文明确标注的发布日期捕获第一组。原生发布日期优先；没有命中或日期无效时保持未知，绝不使用 Atom `updated` 代替原发时间。
+
+MSRC Security Update Guide RSS 是漏洞修订通知，不是完整公告。设置 `bodyAdapter:"msrc_csaf"` 后，RSS 时间仅作为 `sourceUpdatedAt`；正文提取仅从 MSRC 官方逐 CVE CSAF JSON 读取原发日期、说明、产品、修复及原文利用状态。文档缺失、CVE 不符或日期无效时失败，不把网页壳或修订摘要当正文。首次仍受 `_aihot.initialBackfillLimit` 限制；后续仅收首次导入后发布的更新和已有条目的修订，未导入的旧通知不会因为原发日期暂缺而全部补入。不配置 `publishedAfter`：该字段要求列表阶段已有可信原发时间，而 MSRC 的原发日期在后续 CSAF 提取阶段补齐。该适配不判断公司资产是否受影响。
+
 所有信源的 YouTube、Vimeo 视频播放页都不作为文章正文提取。Media RSS 的视频描述保留为摘要，即使设置了 `summaryIsBody` 也不会把描述当成视频字幕；订阅通过 `content` / `content:encoded` 提供的真实文字仍可使用。其他文章中嵌入视频，不影响文章本身的正文读取。
 
 文章正文中的原生视频保留安全的媒体地址和候选格式，使用浏览器控件手动播放。视频文件由浏览器直连原站，封面沿用图片代理；不自动播放、不循环，预加载提示设为 `none`，但浏览器不保证交互前完全没有请求。没有媒体地址和可用封面的播放器只保留后备文字。Markdown 和允许再分发的全文 RSS 保留视频结构，能否播放取决于阅读器；动态平台播放器和 iframe 不在此范围。
@@ -123,9 +127,33 @@
 
 - 接口本身返回数组时，省略 `itemsPath`。`titlePaths`、`summaryPaths`、`authorPaths` 是候选路径数组，按顺序取第一个非空值，例如 `["title", "name"]`。
 - 已有完整网址时用 `{raw:url}`；只有 slug 时可用 `https://example.com/posts/{slug}`。`{字段路径}` 会编码字段值，`{raw:字段路径}` 原样插入。JSON 列表不会自动把相对网址补成绝对网址，模板应产出完整的 HTTP(S) 地址。
+- 多条记录共用一个原文 URL 时，可显式设置 `externalIdPath` 和 `identityByExternalId:true`，按信源与外部 ID 区分新条目；缺少外部 ID 时采集失败。已经保存的外部 ID 沿用原文章身份，原配置不加此选项时行为不变。
 - `summaryIsBody`：确认接口里的摘要就是全文时设为 `true`，把 `summaryPaths` 取到的文字当正文，不再去抓原文页。
 - 日期建议返回带时区的 ISO 字符串；`2026-09-30 17:43:58` 这类不带时区的时间，与网页列表一样按 `publishedAtUtcOffset` 读（默认 `+08:00`）；数字时间戳分别设 `publishedAtUnit: "epoch_s"`（秒）或 `"epoch_ms"`（毫秒），`20261001` 这类日期设 `"yyyymmdd"`。
 - 缺少标题或无法生成链接的条目会跳过。非空数组全部映射失败时，会报 `no items mapped (check title/url paths)`；路径不是数组时，会报 `items path did not resolve to an array`。
+
+#### CISA KEV 收录事件
+
+`json_list` 显式设置 `adapter:"cisa_kev"` 后，只读取 CISA 官方 JSON，或 `cisagov/kev-data` 的官方固定 raw 镜像：
+
+```json
+{
+  "url": "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
+  "adapter": "cisa_kev",
+  "externalIdPath": "cveID",
+  "identityByExternalId": true,
+  "sortByPublishedAt": true,
+  "_aihot": { "initialBackfillLimit": 1 }
+}
+```
+
+镜像地址为 `https://raw.githubusercontent.com/cisagov/kev-data/develop/known_exploited_vulnerabilities.json`，需在信源配置中明确选择，不自动回退到第三方。适配生成逐 CVE 的官方目录查询链接及完整事实正文，保留厂商、产品、描述、措施、期限、勒索使用状态与备注，不抓取整个目录页作为文章正文。缺少有效 CVE、目录收录日期或必要事实的记录拒绝进入采集；非空目录无一条完整记录时失败。
+
+文章代表“CISA 将漏洞纳入 KEV”的收录事件。`dateAdded` 保持 UTC 日期精度，不代表 CVE 首次公开或某个精确时刻；`dueDate` 是相关 CISA 指令所约束联邦文职行政机构的期限，不自动成为所有组织的强制整改日。勒索状态 `Unknown` 表示 CISA 尚无确认，不等于漏洞未被利用。
+
+首次导入仍只保存上例的 1 条，并将**首次完整目录的 CVE 标识基线**保存在信源 cursor 中。后续不补入该基线中未导入的旧条目；允许同日新加入的 CVE，以及已存 CVE 的正文更正。不要清空 cursor；缺少该基线的已初始化 KEV 信源会失败，避免误导入目录存量。目录整体版本变化不会单独改写每篇文章。
+
+RSS 若将多篇公告共用同一个目录链接，可显式配置 `itemUrlContentRegex`，从该条目的正文或摘要提取第一捕获组作为独立原文 URL，并结合 `allowUrlPrefixes` 限定官方地址。例如 Debian DSA 可提取官方 tracker 的逐 DSA 地址，避免不同公告合并成一个目录页。未配置时保留原 RSS 链接行为；正则必须合法。
 
 ### 本地跑通 HTML/JSON 示例
 

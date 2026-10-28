@@ -72,7 +72,7 @@ const detailRulesOf = (source: SourceRow) => (source.config.detail ? sha256(JSON
  */
 export async function listingEntries(source: SourceRow, found: Candidate[]): Promise<CollectionCandidate[]> {
   let candidates = admitListing(found, source);
-  if (source.kind === "json_list" && source.config.externalIdPath) candidates = await reuseExternalMaterialIdentities(source.id, candidates, sql, source.space_id ?? DEFAULT_SPACE_ID);
+  if (source.kind === "json_list" && source.config.externalIdPath) candidates = await reuseExternalMaterialIdentities(source.id, candidates, sql, source.space_id ?? DEFAULT_SPACE_ID, { identityByExternalId: source.config.identityByExternalId === true });
   if (source.config.sortByPublishedAt) candidates.sort((a, b) => (b.publishedAt?.getTime() ?? 0) - (a.publishedAt?.getTime() ?? 0));
   const unreliableDates = source.config.detail?.publishedAtAuthoritative === true;
   const unique = new Map<string, CollectionCandidate>();
@@ -94,10 +94,21 @@ export async function listingEntries(source: SourceRow, found: Candidate[]): Pro
  * and passes an undated entry; `admits` judges again after detail pages may have dated it.
  */
 function admission(source: SourceRow, known: Map<string, StoredDetail>, firstImport: boolean) {
+  const revisionFeed = source.config.bodyAdapter === "msrc_csaf";
+  const kev = source.config.adapter === "cisa_kev";
+  if (kev && !firstImport && !Array.isArray(source.cursor?.cisaKevInitialIds)) throw new FetchError("CISA KEV initial catalog baseline is missing");
+  const initialKevIds = new Set<string>(kev ? source.cursor?.cisaKevInitialIds ?? [] : []);
   const months = Number(source.config._aihot?.initialBackfillMonths ?? 12);
   const floor = firstImport ? Date.now() - months * 30 * DAY_MS
-    : source.kind === "x_search" ? null : Date.parse(String(source.cursor!.initializedAt)) - STALE_ON_DISCOVERY_MS;
-  const byListing = (c: Candidate) => floor === null || !firstImport && known.has(c.identityKey!) || !(c.publishedAt && c.publishedAt.getTime() < floor);
+    : source.kind === "x_search" ? null : Date.parse(String(source.cursor!.initializedAt)) - (revisionFeed ? 0 : STALE_ON_DISCOVERY_MS);
+  const byListing = (candidate: Candidate) => {
+    if (floor === null || !firstImport && known.has(candidate.identityKey!)) return true;
+    // dateAdded has day precision. Remember the complete onboarding catalog so later same-day
+    // additions remain live, without importing entries the bounded first import deliberately left out.
+    if (kev && !firstImport && initialKevIds.has((candidate.raw as { externalId: string }).externalId)) return false;
+    const date = revisionFeed ? candidate.sourceUpdatedAt : candidate.publishedAt;
+    return revisionFeed ? !!date && date.getTime() >= floor : !(date && date.getTime() < floor);
+  };
   return { byListing, admits: (c: Candidate) => byListing(c) && filterPublicationWindow([c], source.config.publishedAfter).length > 0 };
 }
 
@@ -328,6 +339,9 @@ export async function collectSource(sourceId: string, opts: { force?: boolean; x
       detail = { pages: x.pages, truncated: x.truncated, backlog: x.backlog.length, backlogPages: x.backlogPages, dropped: x.dropped };
     }
     found = candidates.length;
+    if (firstImport && source.config.adapter === "cisa_kev") {
+      nextCursor.cisaKevInitialIds = candidates.map(c => (c.raw as { externalId: string }).externalId);
+    }
     candidates = await listingEntries(source, candidates);
     // Admission of old archive entries and detail recovery both need the same stored identities.
     // A later date correction must still reach material that was already admitted without a date.
