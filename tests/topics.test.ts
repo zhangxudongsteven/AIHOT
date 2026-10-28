@@ -153,3 +153,36 @@ test("every topic has a page; unknown topics and pages past the end have none", 
   assert.deepEqual(body.groups.map((g) => g.key), ["company", "field", "genre"]);
   assert.deepEqual(body.topics.map((t) => t.slug).sort(), TOPICS.map((t) => t.slug).sort(), "the index lists every topic");
 });
+
+test("topic latest metadata retains source date precision while exact publication and collection times keep their clocks", async (t) => {
+  const day = new Date().toISOString().slice(0, 10);
+  const midnight = `${day}T00:00:00.000Z`;
+  const collected = new Date(Date.now() - 60_000).toISOString();
+  const samples = [
+    { slug: "openai", precision: day, at: midnight, expected: day },
+    { slug: "anthropic", precision: midnight, at: midnight, expected: midnight },
+    { slug: "google", precision: day, at: collected, expected: collected },
+  ];
+  for (const sample of samples) {
+    const id = `${T}-topic-time-${sample.slug}`;
+    const at = new Date(sample.at);
+    await sql`INSERT INTO articles (id,source_id,identity_key,url,title,discovered_at,timeline_at,published_at,publication_time)
+      VALUES (${id},${OFFICIAL},${id},${`https://example.org/${id}`},${`${sample.slug} precision notice`},${at},${at},${new Date(midnight)},${sample.precision})`;
+    await sql`INSERT INTO publications (article_id,source_id,title,summary,url,discovered_at,timeline_at,published_at,sort_at,visible_after,
+        selected,eligible,channel,tags)
+      VALUES (${id},${OFFICIAL},${`${sample.slug} precision notice`},'日期精度摘要',${`https://example.org/${id}`},${at},${at},${new Date(midnight)},${at},${new Date(Date.now() - 1000)},
+        true,true,'news',${[`entity:${sample.slug}`]})`;
+  }
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() + 3600_000 });
+  try {
+    const index = (await app.inject("/api/site/topics")).json();
+    for (const sample of samples) {
+      const summary = index.topics.find((topic: { slug: string }) => topic.slug === sample.slug);
+      const detail = (await app.inject(`/api/site/topics/${sample.slug}`)).json();
+      for (const latest of [summary.latest, detail.topic.latest]) {
+        assert.equal(latest.at, sample.at, "source precision must not rewrite the ordering instant");
+        assert.equal(latest.time, sample.expected, sample.slug);
+      }
+    }
+  } finally { t.mock.timers.reset(); }
+});

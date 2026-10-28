@@ -21,7 +21,7 @@ const labelOf = (group: GroupInfo) => (group.additionalSourceCount > 0 ? `另外
 // The groups left open in each history entry, with what they showed (null: still loading): back from an
 // item finds them open again. In memory for back within the app; in session storage for a page the
 // browser reloaded on back/forward.
-const openGroups = sessionCache<{ savedAt: number; groups: Record<string, GroupReport[] | null> }>("aihot:open-groups:", 30 * 60 * 1000);
+const openGroups = sessionCache<{ savedAt: number; groups: Record<string, GroupReport[] | null> }>("aihot:open-groups:2:", 30 * 60 * 1000);
 
 /** Keeps what an open group shows for its history entry; `undefined` forgets a closed one. */
 function remember(entry: string, key: string, reports: GroupReport[] | null | undefined) {
@@ -195,7 +195,7 @@ function GroupSheet({ open, onClose, group, filters, parentId }: {
             <li key={r.id} className="flex items-start gap-2 py-3">
               <Link viewTransition to={`/items/${r.id}`} className="min-w-0 flex-1 active:opacity-60">
                 <span className="block text-[12.5px] text-ink-4">
-                  {r.source.name} · <span className="num">{monthDayTime(r.timelineAt)}</span>
+                  {r.source.name} · <span className="num">{monthDayTime(r.timelineTime ?? r.timelineAt)}</span>
                 </span>
                 <span className={`mt-0.5 line-clamp-2 text-[15px] leading-[1.5] ${readTone(read.has(r.id), "text-ink-2")}`}>{r.title}</span>
               </Link>

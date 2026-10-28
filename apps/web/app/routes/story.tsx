@@ -8,8 +8,8 @@ import { SITE } from "@aihot/site";
 import { cachedPage, loadOr404 } from "../lib/api.server";
 import { pageReuse } from "../lib/page-reuse";
 import { breadcrumbLd, pageMeta, storyLd, titled } from "../lib/seo";
-import { beijingTime, monthDay } from "@aihot/contracts/time";
-import { byBeijingDay, monthDayTime, relativeTime } from "../lib/format";
+import { monthDay } from "@aihot/contracts/time";
+import { byBeijingDay, clockTime, monthDayTime, publicationValue, relativeTime } from "../lib/format";
 import { useCurrentSection } from "../lib/motion";
 import { HeatChart } from "../features/story/HeatChart";
 import { sessionCache } from "../lib/session-cache";
@@ -91,6 +91,7 @@ function RailCard({ title, right, children, className = "" }: { title: ReactNode
 
 /** One report on the story timeline: time, source and marks, title, a summary that opens on demand. */
 function TimelineRow({ r }: { r: StoryReportView }) {
+  const shownAt = publicationValue(r.publishedAt, r.publicationTime);
   const [open, setOpen] = useState(false);
   const [clamped, setClamped] = useState(false);
   const ref = useRef<HTMLParagraphElement>(null);
@@ -100,8 +101,8 @@ function TimelineRow({ r }: { r: StoryReportView }) {
   }, [r.summary, open]);
   return (
     <li className="grid gap-x-3 border-b border-line-soft py-4 last:border-b-0 lg:grid-cols-[48px_minmax(0,1fr)]">
-      <time dateTime={r.publishedAt} className="mono text-[12px] leading-[20px] text-ink-4">
-        {beijingTime(r.publishedAt)}
+      <time dateTime={shownAt} className="mono text-[12px] leading-[20px] text-ink-4">
+        {clockTime(shownAt)}
       </time>
       <div className="min-w-0">
         <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5 text-[12px] leading-[20px] text-ink-4 lg:mt-0">
@@ -152,6 +153,8 @@ export default function StoryPage() {
     if (filter !== "all" || order !== "desc" || viewCache.peek(entry)) viewCache.set(entry, { savedAt: Date.now(), filter, order });
   }, [entry, filter, order]);
   const status = STATUS[story.status];
+  const firstReportTime = story.firstReportTime ?? story.firstReportAt;
+  const latestTime = story.latestTime ?? story.latestAt;
   // A settled story nobody watched (history pages) has no heat to explain or chart.
   const observed = story.status !== "settled" || story.heat.length > 0 || story.whyHot.participants48h > 0 || story.whyHot.rank !== null;
   const sections = observed ? [SECTIONS.overview, SECTIONS.reports, SECTIONS.heat] : [SECTIONS.overview, SECTIONS.reports];
@@ -208,10 +211,10 @@ export default function StoryPage() {
             <IconUsers size={15} className="text-ink-4" />
             <b className="num font-semibold text-ink">{story.sourceCount}</b> 个报道来源
           </span>
-          {story.latestAt && (
+          {latestTime && (
             <span className="inline-flex items-center gap-1.5" suppressHydrationWarning>
               <IconClock size={15} className="text-ink-4" />
-              {relativeTime(story.latestAt)}更新
+              {relativeTime(latestTime)}更新
             </span>
           )}
         </div>
@@ -252,7 +255,7 @@ export default function StoryPage() {
               <div className="-mx-5 mt-5 border-t border-line-soft px-5 pt-4 lg:-mx-6 lg:px-6">
                 <div className="flex items-center gap-2.5 text-[12px]">
                   <span className="font-semibold text-ink">最新进展</span>
-                  {story.latestAt && <span className="num text-ink-4">{monthDayTime(story.latestAt)}</span>}
+                  {latestTime && <span className="num text-ink-4">{monthDayTime(latestTime)}</span>}
                 </div>
                 {newest ? (
                   <Link viewTransition to={`/items/${newest.id}`} className="group mt-1.5 inline text-[14px] leading-[1.7] text-ink-2 transition-colors hover:text-accent">
@@ -278,7 +281,7 @@ export default function StoryPage() {
                   <li key={d.factId} className="relative">
                     <span className={`absolute -left-5 top-[7px] size-[7px] rounded-full ring-4 ring-surface ${d.factId === story.developments[0]?.factId ? "bg-accent" : "bg-line-strong"}`} aria-hidden="true" />
                     <div className="num text-[12px] text-ink-4">
-                      {monthDayTime(d.firstReportAt)} · {d.reportCount} 篇报道
+                      {monthDayTime(d.firstReportTime ?? d.firstReportAt)} · {d.reportCount} 篇报道
                     </div>
                     <Link viewTransition to={`/items/${d.representative.id}`} className="mt-0.5 block text-[15px] font-semibold leading-snug text-ink transition-colors hover:text-accent">
                       {d.title}
@@ -415,19 +418,19 @@ export default function StoryPage() {
           )}
           <RailCard title="事件记录" className="hidden lg:block">
             <dl className="space-y-2 text-[12.5px]">
-              {story.firstReportAt && (
+              {firstReportTime && (
                 <div className="flex justify-between gap-3">
                   <dt className="text-ink-4">最早报道</dt>
                   <dd className="num text-ink-2">
-                    <time dateTime={story.firstReportAt}>{monthDayTime(story.firstReportAt)}</time>
+                    <time dateTime={firstReportTime}>{monthDayTime(firstReportTime)}</time>
                   </dd>
                 </div>
               )}
-              {story.latestAt && (
+              {latestTime && (
                 <div className="flex justify-between gap-3">
                   <dt className="text-ink-4">最近更新</dt>
                   <dd className="num text-ink-2">
-                    <time dateTime={story.latestAt}>{monthDayTime(story.latestAt)}</time>
+                    <time dateTime={latestTime}>{monthDayTime(latestTime)}</time>
                   </dd>
                 </div>
               )}

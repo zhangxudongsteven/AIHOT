@@ -53,7 +53,7 @@ function description(data: TopicPage, parts: Part[]): string {
   const { topic } = data;
   let text = topic.definition;
   const news = parts.flatMap((p) => p.news(p.data)).slice(0, 2).map((title) => title.replace(/[。.]$/u, "")).join("；");
-  if (news && topic.latest) text = `${monthDay(beijingDate(topic.latest.at))}更新：${news}。${topic.definition}`;
+  if (news && topic.latest) text = `${monthDay(beijingDate(topic.latest.time ?? topic.latest.at))}更新：${news}。${topic.definition}`;
   return text.length > 150 ? `${text.slice(0, 149)}…` : text;
 }
 
@@ -80,7 +80,7 @@ function routeMeta({ loaderData }: Route.MetaArgs) {
             path,
             name: `${topic.name} 最新动态`,
             description: text,
-            dateModified: topic.latest?.at ?? null,
+            dateModified: topic.latest?.time ?? topic.latest?.at ?? null,
             lists: parts.map((p) => ({ name: p.name, entries: p.entries(p.data) })),
           }),
           crumbs,
@@ -127,7 +127,7 @@ export default function TopicRoute() {
         <div className="flex items-center gap-4 text-[12px] text-ink-4">
           {topic.latest && (
             <span>
-              <time dateTime={topic.latest.at} className="num">{monthDayTime(topic.latest.at)}</time> 更新
+              <time dateTime={topic.latest.time ?? topic.latest.at} className="num">{monthDayTime(topic.latest.time ?? topic.latest.at)}</time> 更新
             </span>
           )}
         </div>

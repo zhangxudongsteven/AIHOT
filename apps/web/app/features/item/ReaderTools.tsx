@@ -7,7 +7,7 @@ import { IconBookmark, IconExternal, IconList, IconShare } from "../../component
 import { useStar } from "../feed/parts";
 import type { FeedItemSummary } from "@aihot/contracts/site";
 
-type Starrable = Pick<FeedItemSummary, "id" | "title" | "summary" | "source" | "publishedAt" | "score" | "selected">;
+type Starrable = Pick<FeedItemSummary, "id" | "title" | "summary" | "source" | "publishedAt" | "publicationTime" | "score" | "selected">;
 
 /** True while the reader is scrolling down through the page (not near its top or end). */
 function useReadingDown(): boolean {

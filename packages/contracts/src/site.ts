@@ -47,6 +47,8 @@ export interface ItemSummary {
   source: SourceRef;
   links: { original: string };
   publishedAt: string | null;
+  /** YYYY-MM-DD, an exact ISO timestamp, or unknown; absent in older cached site answers. */
+  publicationTime?: string | null;
   discoveredAt: string;
   timelineAt: string;
   category: CategoryKey | null;
@@ -58,7 +60,7 @@ export interface ItemSummary {
 }
 
 /** The fields rendered by a site feed card; full original text lives in the item detail. */
-export interface FeedItemSummary extends Pick<ItemSummary, "id" | "title" | "summary" | "reason" | "source" | "publishedAt" | "timelineAt" | "category" | "tags" | "score" | "selected" | "channel"> {
+export interface FeedItemSummary extends Pick<ItemSummary, "id" | "title" | "summary" | "reason" | "source" | "publishedAt" | "publicationTime" | "timelineAt" | "category" | "tags" | "score" | "selected" | "channel"> {
   x: (Pick<XPostView, "authorName" | "handle" | "avatarUrl" | "avatarSrcSet" | "media"> & {
     quoted: Omit<NonNullable<XPostView["quoted"]>, "url"> | null;
   }) | null;
@@ -85,6 +87,7 @@ export interface GroupInfo {
 export interface TimelineCard {
   key: string;
   anchorAt: string;
+  anchorTime?: string;
   item: FeedItemSummary;
   group: GroupInfo | null;
 }
@@ -160,6 +163,7 @@ export interface GroupReport {
   title: string;
   source: SourceRef;
   timelineAt: string;
+  timelineTime?: string;
   originalUrl: string;
 }
 
@@ -221,6 +225,7 @@ export interface StoryReportView {
   summary: string | null;
   source: SourceRef & { firstParty: boolean };
   publishedAt: string;
+  publicationTime?: string | null;
   selected: boolean;
 }
 
@@ -228,6 +233,7 @@ export interface StoryFactView {
   factId: string;
   title: string;
   firstReportAt: string;
+  firstReportTime?: string;
   reportCount: number;
   representative: StoryReportView;
 }
@@ -239,7 +245,9 @@ export interface StoryDetail {
   reportCount: number;
   sourceCount: number;
   firstReportAt: string | null;
+  firstReportTime?: string;
   latestAt: string | null;
+  latestTime?: string;
   digest: string | null;
   digestUpdatedAt: string | null;
   /** The story's own factual summary, when it has one. */
@@ -415,17 +423,19 @@ export interface SiteStats {
 
 export interface StoryFollowup {
   factId: string;
-  representative: { id: string; title: string; source: { name: string }; timelineAt: string };
+  representative: { id: string; title: string; source: { name: string }; timelineAt: string; timelineTime?: string };
 }
 export interface StoryFollowupsResponse { items: StoryFollowup[]; more: boolean }
 
 /**
  * A starred item as the site can show it now (/api/site/items/availability, keyed by id). Stars keep the
- * source name of the day they were saved; a public item also brings the name shown today.
+ * source name of the day they were saved; a public item brings its current name and publication precision.
  */
 export interface ItemAvailability {
   status: "public" | "summary-only" | "unavailable";
   sourceName?: string;
+  publishedAt?: string | null;
+  publicationTime?: string | null;
 }
 
 /** An issue in the archive and the calendar, numbered in its whole series; closed daily months omit their titles. */
@@ -467,7 +477,7 @@ export interface TopicSummary extends TopicLink {
   /** Enough content to be listed and indexed. */
   indexable: boolean;
   /** The newest selected report. */
-  latest: { title: string; at: string } | null;
+  latest: { title: string; at: string; time?: string } | null;
 }
 
 export interface TopicsResponse {

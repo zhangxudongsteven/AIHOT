@@ -2,7 +2,7 @@ import { publicationSpaceId } from "./context.ts";
 // Selected news timeline: ordinary reports fold by fact; standalone and independent-source articles
 // keep their own cards. Each ordinary fact stays at its first appearance.
 import type { GroupInfo, TimelineCard, TimelineFilters, TimelineResponse } from "@aihot/contracts/site";
-import { beijingDate, beijingMidnight } from "@aihot/contracts/time";
+import { beijingDate, beijingMidnight, isValidDate } from "@aihot/contracts/time";
 import { sql } from "../db.ts";
 import { cachedByKey } from "../lib/cache.ts";
 import { pickRepresentative, REPRESENTATIVE_COLUMNS, type RepresentativeRow } from "./representative.ts";
@@ -146,13 +146,28 @@ export async function loadTimeline(q: TimelineQuery): Promise<Omit<TimelineRespo
   }
 
   // Recheck scope when hydrating: a withdrawal may commit after the narrow representative read.
-  const rows = new Map(planned.length ? (await sql<ItemRow[]>`
-    SELECT ${ITEM_COLUMNS} ${ITEM_FROM} WHERE p.article_id IN ${sql(planned.map((p) => p.id))}
-      AND ${selectedCondition(now)} ${filterSql(q)}`).map((row) => [row.id, row]) : []);
+  type AnchorOrigin = { gk: string; timeline_at: Date; published_at: Date | null; publication_time: string | null };
+  const [hydrated, origins] = planned.length ? await Promise.all([
+    sql<ItemRow[]>`
+      SELECT ${ITEM_COLUMNS} ${ITEM_FROM} WHERE p.article_id IN ${sql(planned.map((p) => p.id))}
+        AND ${selectedCondition(now)} ${filterSql(q)}`,
+    sql<AnchorOrigin[]>`
+      SELECT CASE WHEN p.fact_id IS NOT NULL AND ${ownFactEvidenceCondition()} AND ${foldableSelectionCondition()}
+        THEN 'f' || p.fact_id::text ELSE 'a' || p.article_id END AS gk,
+        p.timeline_at, p.published_at, a.publication_time
+      FROM publications p JOIN articles a ON a.id = p.article_id
+      WHERE (${factIds.length ? sql`p.fact_id IN ${sql(factIds)}` : sql`false`} OR p.article_id IN ${sql(planned.map((p) => p.id))})
+        AND p.timeline_at IN ${sql(page.map((g) => g.anchor_at))} AND ${listedCondition(now)}
+      ORDER BY p.article_id COLLATE "C"`,
+  ]) : [[], []];
+  const rows = new Map(hydrated.map((row) => [row.id, row]));
   const cards: TimelineCard[] = planned.flatMap(({ id, key, anchorAt, group }) => {
     const row = rows.get(id);
     if (!row) return [];
-    return [{ key, anchorAt, item: toFeedItemSummary(row), group }];
+    const origin = origins.find((r) => r.gk === key && r.timeline_at.toISOString() === anchorAt);
+    const anchorTime = origin && origin.published_at?.getTime() === origin.timeline_at.getTime()
+      && isValidDate(origin.publication_time ?? "") ? origin.publication_time! : anchorAt;
+    return [{ key, anchorAt, anchorTime, item: toFeedItemSummary(row), group }];
   });
 
   // Day header counts for the days on this page, over the full grouped set.

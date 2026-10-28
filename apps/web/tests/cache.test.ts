@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import { CATEGORY_KEYS } from "@aihot/contracts/taxonomy";
 import { UNSAFE_decodeViaTurboStream } from "react-router";
-import { fakeApi, startWebServer, type WebServer } from "./web-server.ts";
+import { chromium, expect } from "@playwright/test";
+import { fakeApi, startWebServer, visit, type WebServer } from "./web-server.ts";
 
 let web: WebServer;
 let origin: string;
@@ -235,4 +236,57 @@ test("a web server assigned port zero serves its own canonical address", async (
     assert.equal(response.status, 200);
     assert.ok((await response.text()).includes(`rel="canonical" href="${ephemeral.origin}/about"`));
   } finally { await ephemeral.stop(); }
+});
+
+test("admin article diagnostics and both source previews retain date precision and real clocks", async () => {
+  const midnight = "2026-10-04T00:00:00.000Z";
+  const source = {
+    id: "date-source", name: "日期测试源", kind: "rss", tier: "T1", enabled: true, participation_mode: "editorial",
+    interval_minutes: 60, first_party: true, signal_group_id: null, owner_entity_id: null, site_fulltext: false,
+    syndicate_fulltext: false, tags: [], config: {}, created_at: midnight, updated_at: midnight, next_fetch_at: null,
+  };
+  const api = fakeApi((url) => {
+    if (url.pathname === "/api/admin/me") return { name: "Fixture admin", csrf: "fixture", dev: true };
+    if (url.pathname === "/api/admin/nav-counts") return {};
+    if (url.pathname === "/api/admin/sources/date-source") return { source, runs: [], items: [], stats: { total: 0, last7d: 0, selected: 0 }, history: [], republish: null };
+    if (url.pathname.endsWith("/preview")) return { ms: 1, count: 2, items: [
+      { title: "仅日期预览", url: "https://example.org/day", publishedAt: midnight, publicationTime: "2026-10-04", excerpt: "日期摘要" },
+      { title: "准确零点预览", url: "https://example.org/exact", publishedAt: midnight, publicationTime: midnight, excerpt: "时刻摘要" },
+    ] };
+    if (url.pathname.startsWith("/api/admin/content/")) {
+      const id = url.pathname.split("/").at(-1)!;
+      return {
+        article: { id, source_id: source.id, source_name: source.name, source_kind: "rss", tier: "T1", participation_mode: "editorial",
+          title: "日期诊断", url: `https://example.org/${id}`, identity_key: id, author: null, language: "en", published_at: midnight,
+          publication_time: id === "exact" ? midnight : "2026-10-04", published_at_claim: midnight, discovered_at: "2026-10-04T09:35:00.000Z",
+          timeline_at: id === "collected" ? "2026-10-04T09:35:00.000Z" : midnight, backfill: id !== "collected", body_status: "ok",
+          revision: 1, processing_state: "analyzed", processing_error: null, grouped_at: null, body_chars: 100, site_fulltext: false, syndicate_fulltext: false },
+        discoveries: [], revisions: [], analyses: [], publication: null, override: null, ledger: [], membership: [], decisions: [], deliveries: [], history: [],
+      };
+    }
+  });
+  const web = await startWebServer(api);
+  const browser = await chromium.launch({ channel: "chromium" });
+  const page = await browser.newPage({ viewport: { width: 1366, height: 1000 } });
+  try {
+    for (const [id, expected] of [
+      ["day", "原文时间 2026-10-04 · 时间轴 2026-10-04"],
+      ["collected", "原文时间 2026-10-04 · 时间轴 2026-10-04 17:35"],
+      ["exact", "原文时间 2026-10-04 08:00 · 时间轴 2026-10-04 08:00"],
+    ]) {
+      await visit(page, `${web.origin}/admin/content/${id}`);
+      await expect(page.getByText(/^原文时间 /)).toHaveText(expected!);
+    }
+    for (const [path, button] of [["/admin/sources/new", "预览抓取"], ["/admin/sources/date-source", "预览当前配置"]]) {
+      await visit(page, web.origin + path);
+      await page.getByRole("button", { name: button, exact: true }).click();
+      const preview = (name: string) => page.locator("li", { has: page.getByRole("link", { name, exact: true }) });
+      await expect(preview("仅日期预览")).toContainText("2026-10-04");
+      await expect(preview("仅日期预览")).not.toContainText("08:00");
+      await expect(preview("准确零点预览")).toContainText("2026-10-04 08:00");
+    }
+  } finally {
+    await browser.close();
+    await web.stop();
+  }
 });

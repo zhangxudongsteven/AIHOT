@@ -7,6 +7,7 @@ import type { AdminContentChain, AdminPresentationRefresh } from "@aihot/contrac
 import { adminGet } from "../../lib/admin.server";
 import { useAdminAction } from "../../features/admin/action";
 import { bj, money } from "../../features/admin/format";
+import { fullDateTime, publicationValue, timelineValue } from "../../lib/format";
 import { KIND_LABEL, MODE_LABEL, VISIBILITY_LABEL } from "../../features/admin/labels";
 import { AdminPage, Badge, Button, Card, Empty, Field, Input, Json, KV, ReasonDialog, Select, Textarea } from "../../features/admin/ui";
 
@@ -121,7 +122,7 @@ export default function ContentItem({ loaderData }: Route.ComponentProps) {
                 ))}
               </ul>
               <div className="mt-1.5 text-[12px] text-ink-4">
-                原文时间 {a.published_at ? bj(a.published_at, true) : "未知"}{a.published_at_claim && !a.published_at ? `（声称 ${a.published_at_claim}，未采信）` : ""} · 时间轴 {bj(a.timeline_at, true)}
+                原文时间 {a.published_at ? fullDateTime(publicationValue(a.published_at, a.publication_time)) : "未知"}{a.published_at_claim && !a.published_at ? `（声称 ${a.published_at_claim}，未采信）` : ""} · 时间轴 {fullDateTime(timelineValue({ timelineAt: a.timeline_at, publishedAt: a.published_at, publicationTime: a.publication_time }))}
               </div>
             </Step>
             <Step title="正文与修订" meta={`第 ${a.revision} 版 · 正文 ${a.body_status} · ${a.body_chars ?? 0} 字符`}>

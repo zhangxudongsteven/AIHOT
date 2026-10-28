@@ -13,7 +13,7 @@ import { after, before, test } from "node:test";
 import * as cheerio from "cheerio";
 import { reportDateLabel, type FeedItemSummary, type ReportCitation, type ReportDetail, type ReportKind, type SiteItemDetail, type StoryDetail } from "@aihot/contracts/site";
 import { SITE, withSubject } from "@aihot/site";
-import { articleLd, readFilters, reportLd } from "../apps/web/app/lib/seo.ts";
+import { articleLd, readFilters, reportLd, storyLd } from "../apps/web/app/lib/seo.ts";
 import { startWebServer, type WebServer } from "../apps/web/tests/web-server.ts";
 
 const at = "2026-10-04T08:00:00.000Z";
@@ -137,4 +137,15 @@ test("story metadata describes the visible collection, current summary and repor
   const list = collection.mainEntity as { itemListElement: Array<{ name: string }> };
   assert.deepEqual(list.itemListElement.map((entry) => entry.name), [item.title]);
   assert.ok($("main").text().includes(story.digest!));
+});
+
+test("story update metadata preserves the winning report's date precision and real digest update time", () => {
+  const midnight = "2026-10-04T00:00:00.000Z";
+  const dated: StoryDetail = { ...story, latestAt: midnight, latestTime: "2026-10-04", digest: null, digestUpdatedAt: null };
+  assert.equal(storyLd(dated).dateModified, "2026-10-04");
+  assert.equal(storyLd({ ...dated, latestTime: midnight }).dateModified, midnight, "an exact midnight is retained");
+  assert.equal(storyLd({ ...dated, latestTime: undefined }).dateModified, midnight, "legacy precision is not guessed");
+  const digestUpdatedAt = "2026-10-04T09:17:26.000Z";
+  assert.equal(storyLd({ ...dated, digest: "更新的综述", digestUpdatedAt }).dateModified, digestUpdatedAt);
+  assert.equal(storyLd({ ...dated, digest: "旧综述", digestUpdatedAt: "2026-10-03T20:00:00.000Z" }).dateModified, "2026-10-04");
 });

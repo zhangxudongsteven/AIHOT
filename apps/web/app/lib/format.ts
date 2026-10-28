@@ -1,4 +1,4 @@
-import { beijingDate, beijingTime, beijingWeekday, monthDay } from "@aihot/contracts/time";
+import { beijingDate, beijingTime, beijingWeekday, isValidDate, monthDay } from "@aihot/contracts/time";
 
 /** A list cut into runs of the same Beijing day, in the list's own order. */
 export function byBeijingDay<T>(list: readonly T[], at: (entry: T) => string): Array<{ day: string; entries: T[] }> {
@@ -18,6 +18,7 @@ export function weekdayShort(date: string): string {
 }
 
 export function relativeTime(iso: string, now = Date.now()): string {
+  if (isValidDate(iso)) return iso;
   const t = Date.parse(iso);
   const s = Math.max(0, Math.round((now - t) / 1000));
   if (s < 60) return "刚刚";
@@ -31,12 +32,28 @@ export function relativeTime(iso: string, now = Date.now()): string {
 }
 
 export function fullDateTime(iso: string): string {
+  if (isValidDate(iso)) return iso;
   return `${beijingDate(iso)} ${beijingTime(iso)}`;
 }
 
 /** "9月24日 10:51" (Beijing), for lists that span days. */
 export function monthDayTime(iso: string): string {
+  if (isValidDate(iso)) return monthDay(iso);
   return `${monthDay(beijingDate(iso))} ${beijingTime(iso)}`;
+}
+
+export function publicationValue(at: string, precision?: string | null): string {
+  return precision && isValidDate(precision) ? precision : at;
+}
+
+export function timelineValue(item: { timelineAt: string; publishedAt: string | null; publicationTime?: string | null }): string {
+  return item.publishedAt && Date.parse(item.timelineAt) === Date.parse(item.publishedAt)
+    ? publicationValue(item.timelineAt, item.publicationTime)
+    : item.timelineAt;
+}
+
+export function clockTime(value: string): string {
+  return isValidDate(value) ? monthDay(value) : beijingTime(value);
 }
 
 export function sourceInitial(name: string): string {

@@ -25,6 +25,7 @@ export interface ItemRow {
   channel: "news" | "x";
   url: string;
   published_at: Date | null;
+  publication_time: string | null;
   discovered_at: Date;
   timeline_at: Date;
   /** Holds its fact's selected seat (publish.ts settleSeats). */
@@ -53,7 +54,7 @@ export const ITEM_COLUMNS = sql`
   p.article_id AS id, p.title, p.original_title, p.summary, p.reason, p.category, p.tags, p.score,
   p.selected, p.seat, p.channel, p.url, p.published_at, p.discovered_at, p.timeline_at, p.visibility,
   p.body_mode, p.indexable, p.fact_id, s.name AS source_name, s.participation_mode AS source_mode,
-  a.x_post, a.author, a.language,
+  a.x_post, a.author, a.language, a.publication_time,
   CASE WHEN s.kind = 'x_search' AND ${sourceOwnsPost(sql`s.config`, sql`a.x_post->>'handle'`)} THEN s.icon_url END AS author_avatar_url,
   st.public_id::text AS story_public_id, st.title AS story_title,
   CASE WHEN p.channel = 'x' THEN tr.body_text END AS zh_text, qt.text_zh AS quoted_zh`;
@@ -171,6 +172,7 @@ export function toItemSummary(row: ItemRow): ItemSummary {
     source: { name: publicSourceName(row.source_name) },
     links: { original: row.url },
     publishedAt: row.published_at?.toISOString() ?? null,
+    publicationTime: row.publication_time ?? null,
     discoveredAt: row.discovered_at.toISOString(),
     timelineAt: row.timeline_at.toISOString(),
     category: (row.category as CategoryKey | null) ?? null,
@@ -188,7 +190,7 @@ export function toFeedItemSummary(row: ItemRow): FeedItemSummary {
   const x = showsPost(row) ? xView(row, true) : null;
   return {
     id: item.id, title: item.title, summary: item.summary ?? (x?.text || null), reason: item.reason,
-    source: item.source, publishedAt: item.publishedAt, timelineAt: item.timelineAt,
+    source: item.source, publishedAt: item.publishedAt, publicationTime: item.publicationTime, timelineAt: item.timelineAt,
     category: item.category, tags: item.tags, score: item.score, selected: item.selected, channel: item.channel,
     x: x ? {
       authorName: x.authorName, handle: x.handle, avatarUrl: x.avatarUrl,

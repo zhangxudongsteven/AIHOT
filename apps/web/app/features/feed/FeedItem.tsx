@@ -9,7 +9,7 @@ import type { GroupInfo, FeedItemSummary, TimelineFilters } from "@aihot/contrac
 import { ITEM_COPY } from "@aihot/site";
 import { SameEventBadge, SelectedBadge } from "../../components/ui/Badge";
 import { ScoreLabel } from "../../components/ui/Score";
-import { beijingTime } from "@aihot/contracts/time";
+import { clockTime } from "../../lib/format";
 import { MediaThumbs, SourceLine, StarButton, readTone } from "./parts";
 import { GroupButton, GroupSources } from "./ReadingGroup";
 import { QuotedLine } from "../item/QuotedPost";
@@ -43,7 +43,7 @@ export const FeedItem = memo(function FeedItem({ item, group, filters, read = fa
         <SourceLine item={item} className="text-ink-4" />
         {at && (
           <time dateTime={at} className="mono shrink-0 text-[12px] lg:hidden">
-            · {beijingTime(at)}
+            · {clockTime(at)}
           </time>
         )}
         {item.selected && (

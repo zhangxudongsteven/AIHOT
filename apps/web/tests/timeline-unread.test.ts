@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import { chromium, expect, type Browser } from "@playwright/test";
-import { FIXTURE_AT as at, fakeApi, feedItem, itemDetail, startWebServer, type WebServer } from "./web-server.ts";
+import { FIXTURE_AT as at, fakeApi, feedItem, itemDetail, startWebServer, visit, type WebServer } from "./web-server.ts";
 
 const earlier = "2026-10-03T08:00:00.000Z";
 
@@ -18,6 +18,9 @@ const card = (id: string, title: string, timelineAt = at) => ({ key: id, anchorA
 const groupCard = { key: "g1", anchorAt: at, item: summaryOf("rep-1", "代表文章"), group: { factId: "f1", additionalSourceCount: 1, reportCount: 2, memberIds: ["rep-1", "member-2"] } };
 // ...and one whose every selected report is read: it must go.
 const readGroupCard = { key: "g2", anchorAt: at, item: summaryOf("rep-3", "已读完的组"), group: { factId: "f2", additionalSourceCount: 1, reportCount: 2, memberIds: ["rep-3", "member-4"] } };
+const dateOnlyAt = "2026-10-04T00:00:00.000Z";
+const dateReport = { id: "story-date", title: "日期事件报道", summary: "日期报道摘要", source: { name: "Fixture", firstParty: true }, publishedAt: dateOnlyAt, publicationTime: "2026-10-04", selected: true };
+const exactReport = { ...dateReport, id: "story-exact", title: "准确事件报道", publicationTime: dateOnlyAt };
 
 let web: WebServer;
 let origin: string;
@@ -28,9 +31,33 @@ const api = fakeApi((url, res) => {
   const p = url.pathname;
   if (p === "/api/site/topics") return { groups: [], topics: [] };
   if (p === "/api/site/hot") return { computedAt: at, windowHours: 48, entries: [] };
+  if (p === "/api/site/pool") return {
+    filters: { channel: "all", category: null, tag: null, q: null, tab: "time" },
+    items: [
+      feedItem({ id: "pool-date", title: "仅日期列表报道", publishedAt: dateOnlyAt, timelineAt: dateOnlyAt, publicationTime: "2026-10-04" }),
+      feedItem({ id: "pool-collected", title: "实时收录列表报道", publishedAt: dateOnlyAt, timelineAt: "2026-10-04T09:35:00.000Z", publicationTime: "2026-10-04" }),
+    ], page: 1, pageCount: 1, total: 2, todayCount: 0, freshness: at,
+  };
+  if (p === "/api/site/stories/date-story") return {
+    publicId: "date-story", title: "日期精度事件", status: "settled", reportCount: 2, sourceCount: 1,
+    firstReportAt: dateOnlyAt, firstReportTime: "2026-10-04", latestAt: dateOnlyAt, latestTime: "2026-10-04",
+    digest: null, digestUpdatedAt: null, summary: null, excerpt: null, latest: dateReport.title, latestReport: { id: dateReport.id },
+    whyHot: { participants48h: 0, newParticipants6h: 0, recentReports24h: 0, observationComplete: true, rank: null },
+    developments: [{ factId: "date-fact", title: "日期进展", firstReportAt: dateOnlyAt, firstReportTime: "2026-10-04", reportCount: 2, representative: dateReport }],
+    officialReports: [], timeline: [dateReport, exactReport], heat: [], related: [], topics: [],
+  };
+  if (p === "/api/site/stories/date-story/followups") return { items: [
+    { factId: "date-followup", representative: { id: "followup-date", title: "日期后续报道", source: { name: "Fixture" }, timelineAt: dateOnlyAt, timelineTime: "2026-10-04" } },
+  ], more: false };
   if (p === "/api/site/timeline") {
     const tag = url.searchParams.get("tag");
     const cursor = url.searchParams.get("cursor");
+    if (tag === "dates") {
+      return { filters: { channel: "all", category: null, tag }, cards: [
+        { ...card("date-anchor", "日期锚点代表", "2026-10-01T00:00:00.000Z"), anchorTime: "2026-10-01", item: summaryOf("date-anchor", "日期锚点代表", "2026-10-02T03:15:00.000Z") },
+        { ...card("exact-midnight", "准确零点报道", "2026-10-01T00:00:00.000Z"), anchorTime: "2026-10-01T00:00:00.000Z" },
+      ], nextCursor: null, hot: null, dayCounts: { "2026-10-01": 2 } };
+    }
     if (tag === "boundary") {
       const n = cursor ? Number(cursor) : 1;
       return { filters: { channel: "all", category: null, tag }, cards: [card(`boundary-${n}`, `批次 ${n}`)], nextCursor: n < 5 ? String(n + 1) : null, hot: null, dayCounts: { "2026-10-04": 5 } };
@@ -49,11 +76,68 @@ const api = fakeApi((url, res) => {
   }
   if (p === "/api/site/groups/f1/reports") {
     const report = (id: string, title: string) => ({ id, title, source: { name: "Fixture" }, timelineAt: at, originalUrl: `https://example.org/${id}` });
-    return { factId: "f1", reports: [report("rep-1", "代表文章"), report("member-2", "组内未读报道"), report("other-5", "组内已读报道")] };
+    return { factId: "f1", reports: [report("rep-1", "代表文章"), { ...report("member-2", "组内未读报道"), timelineTime: "2026-10-04" }, report("other-5", "组内已读报道")] };
   }
   if (p.startsWith("/api/site/items/")) {
     const id = p.split("/").at(-1)!;
-    return itemDetail({ id, title: `文章 ${id}`, originalTitle: `文章 ${id}` });
+    return itemDetail({ id, title: `文章 ${id}`, originalTitle: `文章 ${id}`, ...(id === "story-parent" ? { story: { publicId: "date-story", title: "日期精度事件" } } : {}) });
+  }
+});
+
+for (const phone of [false, true]) test(`source precision controls the ${phone ? "phone" : "desktop"} timeline clock rather than the representative's date`, async () => {
+  const context = await chrome.newContext({ viewport: phone ? { width: 390, height: 844 } : { width: 1280, height: 900 } });
+  const page = await context.newPage();
+  try {
+    await visit(page, `${origin}/?tag=dates`);
+    await expect(page.locator('[data-card-key="date-anchor"] time').filter({ visible: true })).toHaveText(phone ? "· 10月1日" : "10月1日");
+    await expect(page.locator('[data-card-key="exact-midnight"] time').filter({ visible: true })).toHaveText(phone ? "· 08:00" : "08:00");
+  } finally {
+    await context.close();
+  }
+});
+
+test("a pre-precision timeline snapshot is discarded, and a fresh dated response survives back navigation", async () => {
+  const context = await chrome.newContext({ viewport: { width: 1280, height: 900 } });
+  await context.addInitScript((legacy) => {
+    if (location.pathname !== "/") return;
+    history.replaceState({ ...history.state, key: "legacy-dates", idx: 0 }, "");
+    sessionStorage.setItem("aihot:list:legacy-dates", JSON.stringify({ savedAt: Date.now(), data: legacy, anchor: null, scrollY: 0 }));
+  }, { version: 2, cards: [card("legacy-date", "旧精度缓存", dateOnlyAt)], nextCursor: null, dayCounts: { "2026-10-04": 1 }, collapsed: [], batches: 1, unreadOnly: false });
+  const page = await context.newPage();
+  try {
+    await visit(page, `${origin}/?tag=dates`);
+    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    await expect(page.getByRole("heading", { name: "旧精度缓存", exact: true })).toHaveCount(0);
+    const date = page.locator('[data-card-key="date-anchor"] time').filter({ visible: true });
+    await expect(date).toHaveText("10月1日");
+    await page.getByRole("link", { name: "日期锚点代表", exact: true }).click();
+    await expect(page.getByText("固定正文", { exact: true })).toBeVisible();
+    await page.goBack();
+    await expect(date).toHaveText("10月1日");
+  } finally {
+    await context.close();
+  }
+});
+
+for (const phone of [false, true]) test(`date-only pool and story reports keep their precision on ${phone ? "phones" : "desktop"}`, async () => {
+  const context = await chrome.newContext({ viewport: phone ? { width: 390, height: 844 } : { width: 1280, height: 900 } });
+  const page = await context.newPage();
+  try {
+    await visit(page, `${origin}/all`);
+    const row = (title: string) => page.locator("li", { has: page.getByRole("heading", { name: title, exact: true }) }).locator("time").filter({ visible: true });
+    await expect(row("仅日期列表报道")).toHaveText(phone ? "· 10月4日" : "10月4日");
+    await expect(row("实时收录列表报道")).toHaveText(phone ? "· 17:35" : "17:35");
+    await visit(page, `${origin}/story/date-story`);
+    const reportTime = (title: string) => page.locator("li", { has: page.getByRole("link", { name: title, exact: true }) }).locator("time");
+    await expect(reportTime("日期事件报道")).toHaveText("10月4日");
+    await expect(reportTime("日期事件报道")).toHaveAttribute("datetime", "2026-10-04");
+    await expect(reportTime("准确事件报道")).toHaveText("08:00");
+    await visit(page, `${origin}/items/story-parent`);
+    const followup = page.getByRole("link", { name: /日期后续报道/ });
+    await expect(followup).toBeVisible();
+    await expect(followup).toContainText("2026-10-04");
+  } finally {
+    await context.close();
   }
 });
 
@@ -174,6 +258,7 @@ for (const phone of [false, true]) test(`a kept group is not greyed and its ${ph
     await expect(page.getByText("组内未读报道", { exact: true }).filter({ visible: true })).toBeVisible();
     assert.equal(await greyed("组内未读报道"), false, "an unread report keeps the normal colour");
     assert.equal(await greyed("组内已读报道"), true, "a read report is grey");
+    if (phone) await expect(page.getByText("Fixture · 10月4日", { exact: true })).toBeVisible();
   } finally {
     await context.close();
   }

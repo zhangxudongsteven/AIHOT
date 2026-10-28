@@ -7,6 +7,7 @@ import { publicationConfig, publicationSpaceId, publicationCacheKey } from "./co
 // appear in the Chinese or the original title. Lists and counts read the selected set one report per
 // fact, as v1 and RSS do.
 import type { CategoryKey } from "@aihot/contracts/taxonomy";
+import { isValidDate } from "@aihot/contracts/time";
 import type {
   Brand, TopicGroup, TopicGroupKey, TopicLink, TopicPage, TopicSummary, TopicsResponse,
 } from "@aihot/contracts/site";
@@ -167,6 +168,7 @@ export interface TopicMember {
   tags: string[];
   score: number | null;
   publishedAt: Date | null;
+  publicationTime?: string | null;
   /** Its source is a first-party one. */
   firstParty: boolean;
   /** The fact it reports, and that fact's subject, action and date when known. */
@@ -190,6 +192,7 @@ interface SeatRow {
   title: string;
   original_title: string | null;
   published_at: Date | null;
+  publication_time: string | null;
   fact_published_at: Date | null;
   tags: string[];
   score: number | null;
@@ -217,10 +220,10 @@ async function readSeats(now: Date, ids?: string[], topics: Topic[] = publicatio
   const rows = await sql<SeatRow[]>`
     WITH seats AS (
       SELECT p.article_id AS id, p.revision, p.timeline_at AS at, p.visible_after AS released, p.title, p.score, (s.tier = 'T1') AS first_party,
-        p.category, p.original_title, p.published_at, p.tags, p.fact_id,
+        p.category, p.original_title, p.published_at, art.publication_time, p.tags, p.fact_id,
         f.subject AS fact_subject, f.action AS fact_action, f.occurred_at AS fact_occurred_at, a.output->>'scope' AS scope,
         st.public_id::text AS story, ${topicMembership(topics)} AS topics
-      FROM publications p JOIN sources s ON s.id = p.source_id
+      FROM publications p JOIN sources s ON s.id = p.source_id JOIN articles art ON art.id = p.article_id
       LEFT JOIN facts f ON f.id = p.fact_id
       LEFT JOIN analyses a ON a.id = p.analysis_id
       LEFT JOIN stories st ON st.id = p.story_id AND st.merged_into IS NULL
@@ -237,7 +240,7 @@ async function readSeats(now: Date, ids?: string[], topics: Topic[] = publicatio
   return rows.map((r) => ({
     id: r.id, revision: r.revision, at: r.at, released: r.released, title: r.title, topics: r.topics,
     score: r.score, firstParty: r.first_party, category: r.category, factId: r.fact_id, story: r.story,
-    originalTitle: r.original_title, publishedAt: r.published_at, factPublishedAt: r.fact_published_at, tags: r.tags,
+    originalTitle: r.original_title, publishedAt: r.published_at, publicationTime: r.publication_time, factPublishedAt: r.fact_published_at, tags: r.tags,
     factSubject: r.fact_subject, factAction: r.fact_action, factOccurredAt: r.fact_occurred_at, scope: r.scope,
   }));
 }
@@ -303,7 +306,11 @@ function summarize(t: Topic, seats: TopicMember[], now: Date, brands: Map<string
     total: seats.length,
     recent,
     indexable: isIndexable(seats.length, recent),
-    latest: latest ? { title: latest.title, at: latest.at.toISOString() } : null,
+    latest: latest ? {
+      title: latest.title, at: latest.at.toISOString(),
+      time: latest.publishedAt?.getTime() === latest.at.getTime() && isValidDate(latest.publicationTime ?? "")
+        ? latest.publicationTime! : latest.at.toISOString(),
+    } : null,
   };
 }
 
