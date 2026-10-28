@@ -3,7 +3,9 @@
 import assert from "node:assert/strict";
 import http from "node:http";
 import { after, test } from "node:test";
+import { MockAgent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import { config } from "@aihot/backend/config";
+import { fetchMsrcCsaf } from "@aihot/backend/sources/msrc";
 import { fetchDetail, fromHtml } from "@aihot/backend/sources/web-list";
 
 const html = `<html><head><meta name="date" content="2026-09-11T19:58:33Z"></head><body>` +
@@ -45,4 +47,46 @@ test("generic detail metadata does not promote modified or unlabelled time eleme
   }
   const published = await fetchDetail(base + "/published", source, { date: true, title: false, summary: false });
   assert.equal(published.publishedAt?.toISOString(), "2020-02-15T00:00:00.000Z");
+});
+
+test("MSRC CSAF uses the CVE's original release and retains vendor impact, products and fixes", async () => {
+  const previousDispatcher = getGlobalDispatcher();
+  const previousProxy = config.egressProxyUrl;
+  const agent = new MockAgent();
+  agent.disableNetConnect();
+  setGlobalDispatcher(agent);
+  config.egressProxyUrl = null;
+  const cve = "CVE-2026-70338";
+  const path = "/csaf/advisories/2026/msrc_cve-2026-70338.json";
+  const url = `https://msrc.microsoft.com/update-guide/vulnerability/${cve}`;
+  const document = {
+    document: { title: "PowerShell security feature bypass", tracking: { initial_release_date: "2026-08-11T07:00:00Z", current_release_date: "2026-10-26T07:00:00Z" }, aggregate_severity: { text: "Important" } },
+    product_tree: { branches: [{ branches: [{ product: { product_id: "powershell", name: "PowerShell 7.4 before 7.4.19" } }] }] },
+    vulnerabilities: [{ cve, notes: [{ title: "Impact", text: "An attacker could bypass application control restrictions. <script>unsafe()</script><a href='javascript:unsafe()'>Unsafe URL</a>" }], product_status: { known_affected: ["powershell"] }, threats: [{ category: "exploit_status", details: "Publicly Disclosed:No;Exploited:No" }], remediations: [{ category: "vendor_fix", details: "7.4.19:Security Update", product_ids: ["powershell"] }] }],
+  };
+  const reply = (value: unknown, status = 200) => agent.get("https://msrc.microsoft.com").intercept({ path }).reply(status, JSON.stringify(value), { headers: { "content-type": "application/json" } });
+  try {
+    reply(document);
+    const body = await fetchMsrcCsaf(url);
+    assert.equal(body.publishedAt?.toISOString(), "2026-08-11T07:00:00.000Z");
+    assert.equal(body.via, "msrc_csaf");
+    assert.match(body.text, /PowerShell 7\.4 before 7\.4\.19/);
+    assert.match(body.text, /7\.4\.19:Security Update/);
+    assert.match(body.text, /Publicly Disclosed:No;Exploited:No/);
+    assert.ok(body.html.includes(url));
+    assert.doesNotMatch(body.html, /<script|javascript:/);
+    reply({ ...document, vulnerabilities: [{ ...document.vulnerabilities[0], cve: "CVE-2026-99999" }] });
+    await assert.rejects(fetchMsrcCsaf(url), /does not match/);
+    reply({ ...document, document: { ...document.document, tracking: { initial_release_date: "2026-02-30T07:00:00Z" } } });
+    await assert.rejects(fetchMsrcCsaf(url), /publication date is invalid/);
+    reply({ ...document, document: { ...document.document, tracking: { current_release_date: "2026-10-26T07:00:00Z" } } });
+    await assert.rejects(fetchMsrcCsaf(url), /incomplete/);
+    reply({}, 404);
+    await assert.rejects(fetchMsrcCsaf(url), /HTTP 404/);
+    await assert.rejects(fetchMsrcCsaf("https://example.org/update-guide/vulnerability/CVE-2026-70338"), /official vulnerability URL/);
+  } finally {
+    config.egressProxyUrl = previousProxy;
+    setGlobalDispatcher(previousDispatcher);
+    await agent.close();
+  }
 });

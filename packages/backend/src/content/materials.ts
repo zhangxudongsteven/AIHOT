@@ -192,14 +192,19 @@ export function identityKeyFor(m: MaterialInput): string {
 
 /**
  * A publisher's stable entry ID survives a URL rename. Reuse the earliest material for that ID within
- * its source; new entries still use URL identity, so another discovery of the same URL converges.
- * Existing duplicate rows remain untouched. Only collectors declaring an external ID call this.
+ * its source. New entries use URL identity unless the source explicitly separates entries by its
+ * external ID. Existing duplicate rows remain untouched. Only collectors declaring an external ID call this.
  */
-export async function reuseExternalMaterialIdentities<C extends Pick<MaterialInput, "identityKey" | "raw">>(sourceId: string, candidates: C[], db: Db = sql, spaceId = DEFAULT_SPACE_ID): Promise<C[]> {
+export async function reuseExternalMaterialIdentities<C extends Pick<MaterialInput, "identityKey" | "raw">>(
+  sourceId: string, candidates: C[], db: Db = sql, spaceId = DEFAULT_SPACE_ID, options: { identityByExternalId?: boolean } = {},
+): Promise<C[]> {
   const externalId = (raw: unknown): string | null => {
     const value = raw && typeof raw === "object" ? (raw as Record<string, unknown>).externalId : null;
     return typeof value === "string" && value.length > 0 ? value : typeof value === "number" && Number.isFinite(value) ? String(value) : null;
   };
+  if (options.identityByExternalId && candidates.some(candidate => !externalId(candidate.raw)?.trim())) {
+    throw new Error("A valid external ID is required when entries use external identity");
+  }
   const ids = [...new Set(candidates.map(c => externalId(c.raw)).filter((id): id is string => id !== null))];
   if (ids.length === 0) return candidates;
   const rows = await db<{ external_id: string; identity_key: string }[]>`
@@ -208,7 +213,8 @@ export async function reuseExternalMaterialIdentities<C extends Pick<MaterialInp
     ORDER BY raw->>'externalId', discovered_at, id`;
   const known = new Map(rows.map(row => [row.external_id, row.identity_key]));
   return candidates.map(candidate => {
-    const key = known.get(externalId(candidate.raw) ?? "");
+    const id = externalId(candidate.raw);
+    const key = known.get(id ?? "") ?? (options.identityByExternalId ? `json:${sha256(stableJson([sourceId, id]))}` : null);
     return key ? { ...candidate, identityKey: key } : candidate;
   });
 }

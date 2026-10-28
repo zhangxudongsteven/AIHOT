@@ -29,10 +29,26 @@ after(async () => {
   await new Promise<void>(resolve => server.close(() => resolve()));
 });
 
-async function read(path: string, summaryIsBody = false) {
+async function read(path: string, summaryIsBody = false, overrides: Record<string, unknown> = {}) {
   const feedUrl = `http://127.0.0.1:${(server.address() as { port: number }).port}${path}`;
-  return (await fetchRss({ config: { feedUrl, summaryIsBody }, participation_mode: 'editorial' } as never)).candidates;
+  return (await fetchRss({ config: { feedUrl, summaryIsBody, ...overrides }, participation_mode: 'editorial' } as never)).candidates;
 }
+
+test('an explicit content date rule reads the original date without treating Atom updated as publication', async () => {
+  pages['/content-date'] = `<title>Cloud bulletin</title><content type="html">${escapeXml('<p><strong>Published:</strong> 2026-09-25</p>' + body)}</content>`;
+  const [unconfigured] = await read('/content-date');
+  assert.equal(unconfigured!.publishedAt, null);
+  const [configured] = await read('/content-date', false, { publishedAtContentRegex: 'Published:\\s*(\\d{4}-\\d{2}-\\d{2})', publishedAtUtcOffset: '+00:00' });
+  assert.equal(configured!.publishedAt?.toISOString(), '2026-09-25T00:00:00.000Z');
+  assert.equal(configured!.publicationTime, '2026-09-25');
+  assert.equal(configured!.sourceUpdatedAt?.toISOString(), '2026-09-29T00:00:00.000Z');
+  pages['/native-date'] = '<published>2026-09-24T14:00:00Z</published>' + pages['/content-date'];
+  const [native] = await read('/native-date', false, { publishedAtContentRegex: 'Published:\\s*(\\d{4}-\\d{2}-\\d{2})' });
+  assert.equal(native!.publishedAt?.toISOString(), '2026-09-24T14:00:00.000Z');
+  pages['/invalid-content-date'] = `<title>Invalid date</title><content type="html">${escapeXml('<p>Published: 2026-02-30</p>' + body)}</content>`;
+  const [invalid] = await read('/invalid-content-date', false, { publishedAtContentRegex: 'Published:\\s*(\\d{4}-\\d{2}-\\d{2})' });
+  assert.equal(invalid!.publishedAt, null);
+});
 
 test('Atom HTML and XHTML titles and summaries keep the article and its text in order', async () => {
   for (const path of ['/title', '/html-title']) {

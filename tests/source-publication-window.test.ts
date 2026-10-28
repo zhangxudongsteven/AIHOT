@@ -125,6 +125,25 @@ for (const kind of ["rss", "web_list", "json_list"] as const) test(`${kind} appl
   assert.equal(queued!.n, 2, "excluded history never queues extraction or paid analysis");
 });
 
+test("admin source previews expose original date precision without storing or inventing a clock", async () => {
+  const id = `preview-dates-${T}`;
+  const path = `/json/${id}`;
+  lists.set(path, [
+    { id: "date-only", date: "2026-10-04" },
+    { id: "exact-midnight", date: "2026-10-04T00:00:00.000Z" },
+  ]);
+  const sourceConfig = { url: base + path, titlePaths: ["id"], urlTemplate: `${base}/article/${id}/{id}`,
+    publishedAtPath: "date", publishedAtUtcOffset: "+00:00" };
+  await sql`INSERT INTO sources (id, name, kind, config, next_fetch_at)
+    VALUES (${id}, ${id}, 'json_list', ${sql.json(sourceConfig)}, '2100-01-01')`;
+  for (const preview of [await previewSource({ id, kind: "json_list", config: sourceConfig }), await previewStoredSource(id)]) {
+    assert.equal(preview!.items.find((item) => item.title === "date-only")!.publicationTime, "2026-10-04");
+    assert.equal(preview!.items.find((item) => item.title === "exact-midnight")!.publicationTime, "2026-10-04T00:00:00.000Z");
+    assert.ok(preview!.items.every((item) => item.publishedAt === "2026-10-04T00:00:00.000Z"));
+  }
+  assert.equal((await sql`SELECT count(*)::int AS n FROM articles WHERE source_id = ${id}`)[0]!.n, 0);
+});
+
 test("previews keep exactly what collection stores, under the source's URL, category and noise rules", async () => {
   const id = `rules-${T}`;
   const path = `/rss/${id}`;

@@ -12,6 +12,7 @@ import { jinaRead } from "../providers/jina.ts";
 import { BudgetExceededError } from "../providers/receipts.ts";
 import { getArticle } from "../providers/socialdata.ts";
 import { articleUtcOffset, readPublicationDate, type PublicationDate } from "../sources/dates.ts";
+import { fetchMsrcCsaf } from "../sources/msrc.ts";
 import type { SourceRow } from "../sources/types.ts";
 import { onlyXArticleLink, xArticleText } from "../sources/x.ts";
 import { sanitizeBody, trimTrailingChrome } from "./sanitize.ts";
@@ -22,7 +23,7 @@ export interface ExtractedBody {
   html: string;
   text: string;
   images: Array<{ kind: "image"; url: string; width: number | null; height: number | null }>;
-  via: "readability" | "jina";
+  via: "readability" | "jina" | "msrc_csaf";
   /** The page's publication metadata; neither modification time nor dates mentioned in its prose. */
   publishedAt?: Date | null;
   publicationTime?: string | null;
@@ -149,10 +150,11 @@ export interface PageRules {
   utcOffset?: string;
   preserve?: PreserveRule[];
   acceptLanguage?: string;
+  bodyAdapter?: "msrc_csaf";
 }
 
 export const pageRules = (config: SourceRow["config"]): PageRules =>
-  ({ utcOffset: articleUtcOffset(config), preserve: config.detail?.preserve, acceptLanguage: config.acceptLanguage });
+  ({ utcOffset: articleUtcOffset(config), preserve: config.detail?.preserve, acceptLanguage: config.acceptLanguage, bodyAdapter: config.bodyAdapter });
 
 type Doc = ReturnType<typeof parseHTML>["document"];
 type El = NonNullable<ReturnType<Doc["querySelector"]>>;
@@ -419,6 +421,7 @@ export function readableDocument(document: Doc, url: string, rules: PageRules = 
 }
 
 export async function extractFromUrl(url: string, subject: string, rules: PageRules = {}, opts: { paidFallback?: boolean; context?: SpaceContext } = {}): Promise<ExtractedBody | null> {
+  if (rules.bodyAdapter === "msrc_csaf") return fetchMsrcCsaf(url);
   if (isVideoPageUrl(url)) return null;
   try {
     const res = await guardedFetch(url, { headers: languageHeaders(rules.acceptLanguage), timeoutMs: 20_000, maxBytes: 6 * 1024 * 1024 });
