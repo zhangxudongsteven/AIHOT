@@ -2,7 +2,7 @@
 
 This is an independently maintained fork of [KKKKhazix/AIHOT](https://github.com/KKKKhazix/AIHOT), maintained in [zhangxudongsteven/AIHOT](https://github.com/zhangxudongsteven/AIHOT). Future requirements, fixes, versions, and changelogs belong to this project. Contributing changes back to the original project is no longer the development target.
 
-The application collects sources, selects and writes content, groups events, and creates daily, weekly, and monthly reports for separate business channels. One website exposes these channels through web pages, RSS, a public API, Agent Markdown, and MCP. Security intelligence comes first; overseas policy and consumer hardware are planned later. The final name, branding, sources, and business rules are still pending; `MyHOT` remains a placeholder.
+The application collects sources, selects and writes content, groups events, and creates daily, weekly, and monthly reports for separate business channels. One website exposes these channels through web pages, RSS, a public API, Agent Markdown, and MCP. AI and security are in progress; overseas policy and consumer hardware are planned later. The final name, branding, and complete source and business rules are still pending; `MyHOT` remains a placeholder.
 
 [简体中文](README.md) · [Changelog](CHANGELOG.md) · [Maintenance policy](docs/fork-maintenance.md) · [Known issues](docs/known-issues.md)
 
@@ -10,14 +10,14 @@ The application collects sources, selects and writes content, groups events, and
 
 The current project version is **4.2.0**; the public protocol remains **4.1.0**. Tag `v4.2.0` records the source release, not a production deployment.
 
-The first independently maintained development baseline is **4.1.0** at commit `b0ea3ed`, based on upstream commit `b3998dc6fc138eb9659f33f55eb38c1c716f0d57`. This is this project's version, not an upstream release.
+The first independently maintained development baseline is **4.1.0** at commit `b0ea3ed`, forked from upstream commit `b3998dc6fc138eb9659f33f55eb38c1c716f0d57`. Later upstream fixes are imported individually. This is this project's version, not an upstream release.
 
 - DEV-01 through DEV-05 implement versioned channel configuration, scoped collection and processing, website navigation and public endpoints, independent reports, notification subscriptions, and request quotas.
-- Handoff checks passed: 1033/1033 backend tests, 66/66 Web tests, type checking, and the Web build. See the [handoff validation](docs/reports/2026-10-23-new-machine-handoff.md) for scope and initial failed runs. A new machine still requires validation; earlier results are in the [review record](docs/reports/2026-10-23-review.md) and [LAN validation record](docs/reports/2026-10-23-lan-deployment.md).
+- As of October 28, 2026, `main` includes channel administration, source date precision and security advisory collection, and [six upstream date and sign-in fixes](docs/reports/2026-10-28-upstream-six-fixes.md). The six-fix baseline passed 1095/1095 backend tests, 99/99 Web tests, type checking, build, smoke, and MCP checks on Node 24. Those results apply to the fixed version in that report; subsequent changes need their own validation. Earlier 4.2.0 results are in the [development record](docs/reports/2026-10-27-ai-security-channels.md).
 - MS-001, MS-003, MS-005, and MS-006 are fixed in 4.2.0 (implementation commit `e341acb`); MS-002, MS-004, and MS-007 remain [open](docs/known-issues.md).
-- 4.2.0 adds channel-scoped source management, snapshot-based selection evaluation, and AI/security candidate configurations. All candidates remain disabled and security thresholds are uncalibrated. The existing 1046/1046 backend and 66/66 Web results, type checking, build, smoke, and MCP checks are recorded in the [validation report](docs/reports/2026-10-27-ai-security-channels.md).
-- One real DeepSeek request through TokenHub, receipt reuse, and quota enforcement have been verified; see the [integration record](docs/reports/2026-10-23-deepseek-integration.md). The full content pipeline and Feishu delivery remain unverified, and persistent external-action flags remain disabled.
-- The short-term target is a MacBook Pro with native PostgreSQL 17 and application-only Compose. The [deployment template](docs/macbook-deployment.md) is ready, but the target machine has not been deployed. Security evidence, asset-response workflows, business acceptance, and GKE deployment remain pending.
+- [Candidate channel exports](docs/ai-security-channels.md) remain disabled by default. On October 28, selected AI news, arXiv abstract, and Node.js/Spring security sources were enabled in `myhot-lan` with user authorization; see the [operations summary](docs/reports/2026-10-28-operations-summary.md). Pulling source code does not replay those runtime actions or database state. Security thresholds remain uncalibrated.
+- Small samples have exercised real collection, body/date extraction, model prefiltering, and dual scoring. Paper trials still require observation of pagination, duplicate versions, asynchronous processing, and output quality. AI content subscriptions remained disabled during these operations; this does not establish delivery settings for other channels. Development continues to disable real collection, model calls, and external actions; staging keeps isolated data and external actions disabled.
+- [LAN operation](docs/lan-deployment.md) and [isolated staging acceptance](docs/reports/2026-10-28-source-dates-staging.md) have been recorded. The [MacBook Pro native PostgreSQL template](docs/macbook-deployment.md) is an alternative deployment method requiring separate acceptance on its target machine. Security evidence, asset-response workflows, sustained operational acceptance, and GKE deployment remain pending.
 
 ## Local development
 
@@ -55,6 +55,7 @@ The detailed documents are in Chinese.
 | [Development plan](docs/development-plan.md) | Scope, milestones, and pending business inputs |
 | [New-machine setup](docs/new-machine-setup.md) | Fetching the main baseline, isolating data, restoring private configuration, and validation |
 | [Known issues](docs/known-issues.md) | Reproduction, impact, and acceptance criteria for MS-001 through MS-007 |
+| [October 28 operations summary](docs/reports/2026-10-28-operations-summary.md) | AI, security, and paper source operations, public validation summaries, and pending acceptance |
 | [Channel guide](docs/multi-space-development.md) | Configuration, processing, public endpoints, reports, notifications, and quotas |
 | [Architecture](docs/architecture.md) | Web/API/worker, modules, migrations, and the public read layer |
 | [Sources](docs/sources.md) | Source types, dates, full-text permissions, and external ingestion |

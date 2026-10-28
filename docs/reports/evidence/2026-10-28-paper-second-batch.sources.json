@@ -1,0 +1,85 @@
+{
+  "$comment": "创建前的历史禁用配置，仅供核对配套报告；不代表当前运行状态或自动导入建议。 ACL 后续已移除，参见配套报告。",
+  "sources": [
+    {
+      "id": "ai-rss-arxiv-cs-lg",
+      "name": "arXiv 论文摘要 · 大模型训练与优化 · cs.LG",
+      "kind": "rss",
+      "config": {
+        "feedUrl": "https://export.arxiv.org/api/query?search_query=cat%3Acs.LG+AND+%28%28ti%3Apretraining+OR+ti%3A%22pre-training%22+OR+ti%3A%22post-training%22+OR+ti%3A%22fine-tuning%22+OR+ti%3Aoptimizer+OR+ti%3Aoptimization+OR+ti%3Atraining%29+AND+%28ti%3ALLM+OR+ti%3A%22language+model%22+OR+abs%3A%22large+language+model%22%29%29&start=0&max_results=100&sortBy=submittedDate&sortOrder=descending",
+        "sortByPublishedAt": true,
+        "publishedAfter": "2026-10-26T00:00:00.000Z",
+        "allowUrlPrefixes": [
+          "https://arxiv.org/abs/",
+          "http://arxiv.org/abs/"
+        ],
+        "_aihot": {
+          "initialBackfillLimit": 3,
+          "initialBackfillMonths": 1
+        }
+      },
+      "tier": "T1",
+      "participation_mode": "editorial",
+      "interval_minutes": 180,
+      "enabled": false,
+      "owner_entity_id": null,
+      "tags": [
+        "研究",
+        "论文",
+        "预印本",
+        "仅摘要"
+      ],
+      "site_fulltext": false,
+      "syndicate_fulltext": false
+    },
+    {
+      "id": "ai-rss-arxiv-cs-cv",
+      "name": "arXiv 论文摘要 · 多模态与视觉评测 · cs.CV",
+      "kind": "rss",
+      "config": {
+        "feedUrl": "https://export.arxiv.org/api/query?search_query=cat%3Acs.CV+AND+%28%28ti%3A%22vision-language%22+OR+ti%3A%22vision+language%22+OR+ti%3A%22vision-language-action%22+OR+ti%3A%22multimodal+large+language%22+OR+ti%3A%22video+generation%22+OR+ti%3A%22image+generation%22+OR+ti%3A%22visual+reasoning%22+OR+%28ti%3Amultimodal+AND+%28abs%3A%22language+model%22+OR+abs%3ALLM%29%29+OR+%28ti%3Abenchmark+AND+%28abs%3A%22vision-language+model%22+OR+abs%3A%22multimodal+large+language%22%29%29%29%29&start=0&max_results=100&sortBy=submittedDate&sortOrder=descending",
+        "sortByPublishedAt": true,
+        "publishedAfter": "2026-10-26T00:00:00.000Z",
+        "allowUrlPrefixes": [
+          "https://arxiv.org/abs/",
+          "http://arxiv.org/abs/"
+        ],
+        "_aihot": {
+          "initialBackfillLimit": 3,
+          "initialBackfillMonths": 1
+        }
+      },
+      "tier": "T1",
+      "participation_mode": "editorial",
+      "interval_minutes": 180,
+      "enabled": false,
+      "owner_entity_id": null,
+      "tags": [
+        "研究",
+        "论文",
+        "预印本",
+        "仅摘要"
+      ],
+      "site_fulltext": false,
+      "syndicate_fulltext": false
+    },
+    {
+      "id": "ai-external-acl-anthology",
+      "name": "ACL Anthology（待逐篇增量与日期验收）",
+      "kind": "external",
+      "config": {},
+      "tier": "T1",
+      "participation_mode": "editorial",
+      "interval_minutes": 180,
+      "enabled": false,
+      "owner_entity_id": null,
+      "tags": [
+        "研究",
+        "论文",
+        "待接入"
+      ],
+      "site_fulltext": false,
+      "syndicate_fulltext": false
+    }
+  ]
+}

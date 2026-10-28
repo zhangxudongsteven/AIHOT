@@ -1,0 +1,882 @@
+{
+  "date": "2026-10-28",
+  "evidenceScope": "裁减后的公开验证摘要；不含原始运行快照、回执、预算用量或审计数据，完整原件仅在本机保留。",
+  "method": "Public GET only; existing listing/body parsers; no database writes, model calls or paid fallback.",
+  "scope": "Listing parser and first two body samples; not worker/publication end-to-end acceptance; counts are feed snapshot sizes, not daily output.",
+  "firstPass": [
+    {
+      "name": "DeepMind",
+      "url": "https://deepmind.google/blog/rss.xml",
+      "kind": "rss",
+      "count": 100,
+      "dated": 100,
+      "finalUrl": "https://deepmind.google/blog/rss.xml",
+      "samples": [
+        {
+          "title": "Genie 4: A new generation of world simulation",
+          "url": "https://deepmind.google/blog/genie-4-a-new-generation-of-world-simulation/",
+          "date": "2026-10-27T16:01:38.000Z",
+          "bodyChars": 0,
+          "excerptChars": 85
+        },
+        {
+          "title": "Beyond tree cover: mapping the world’s forest types",
+          "url": "https://deepmind.google/blog/beyond-tree-cover-mapping-the-worlds-forest-types/",
+          "date": "2026-10-22T14:30:24.000Z",
+          "bodyChars": 0,
+          "excerptChars": 91
+        }
+      ]
+    },
+    {
+      "name": "OpenAI",
+      "url": "https://openai.com/news/rss.xml",
+      "kind": "rss",
+      "count": 1331,
+      "dated": 1331,
+      "finalUrl": "https://openai.com/news/rss.xml",
+      "samples": [
+        {
+          "title": "Retell uses OpenAI models to help power 100M monthly calls",
+          "url": "https://openai.com/index/retell-ai",
+          "date": "2026-10-27T15:00:00.000Z",
+          "bodyChars": 0,
+          "excerptChars": 121
+        },
+        {
+          "title": "OpenAI expands partnership with Oracle to bring its apps to ChatGPT",
+          "url": "https://openai.com/index/oracle-apps-in-chatgpt",
+          "date": "2026-10-27T07:00:00.000Z",
+          "bodyChars": 0,
+          "excerptChars": 139
+        }
+      ]
+    },
+    {
+      "name": "Qwen",
+      "url": "https://qwenlm.github.io/blog/index.xml",
+      "kind": "rss",
+      "count": 44,
+      "dated": 44,
+      "finalUrl": "https://qwenlm.github.io/blog/index.xml",
+      "samples": [
+        {
+          "title": "Qwen3Guard: Real-time Safety for Your Token Stream",
+          "url": "https://qwenlm.github.io/blog/qwen3guard/",
+          "date": "2025-09-22T20:00:00.000Z",
+          "bodyChars": 0,
+          "excerptChars": 676
+        },
+        {
+          "title": "Qwen-Image-Edit: Image Editing with Higher Quality and Efficiency",
+          "url": "https://qwenlm.github.io/blog/qwen-image-edit/",
+          "date": "2025-08-18T17:30:00.000Z",
+          "bodyChars": 0,
+          "excerptChars": 540
+        }
+      ]
+    },
+    {
+      "name": "BAIR",
+      "url": "https://bair.berkeley.edu/blog/feed.xml",
+      "kind": "rss",
+      "count": 10,
+      "dated": 10,
+      "finalUrl": "https://bair.berkeley.edu/blog/feed.xml",
+      "samples": [
+        {
+          "title": "From CUDA to MLX: How K-Search Brings Decades of Kernel Expertise to Apple Silicon",
+          "url": "http://bair.berkeley.edu/blog/2026/07/29/cuda-to-mlx-k-search/",
+          "date": "2026-07-29T09:00:00.000Z",
+          "bodyChars": 0,
+          "excerptChars": 2000
+        },
+        {
+          "title": "Teaching LLMs to Update Beliefs for Efficient Long-Horizon Interaction",
+          "url": "http://bair.berkeley.edu/blog/2026/07/26/abbel/",
+          "date": "2026-07-26T09:00:00.000Z",
+          "bodyChars": 0,
+          "excerptChars": 2000
+        }
+      ]
+    },
+    {
+      "name": "Qwen GitHub",
+      "url": "https://github.com/QwenLM/Qwen3/releases.atom",
+      "kind": "rss",
+      "count": 0,
+      "dated": 0,
+      "finalUrl": "https://github.com/QwenLM/Qwen3/releases.atom",
+      "samples": []
+    },
+    {
+      "name": "Microsoft Research",
+      "url": "https://www.microsoft.com/en-us/research/feed/",
+      "kind": "rss",
+      "count": 10,
+      "dated": 10,
+      "finalUrl": "https://www.microsoft.com/en-us/research/feed/",
+      "samples": [
+        {
+          "title": "Flint-interactive: A language for creating interactive data visualizations",
+          "url": "https://www.microsoft.com/en-us/research/blog/flint-interactive-a-language-for-creating-interactive-data-visualizations/",
+          "date": "2026-10-22T16:00:00.000Z",
+          "bodyChars": 7997,
+          "excerptChars": 320
+        },
+        {
+          "title": "Solving a 31-year-old grand challenge in mathematics – the KLS conjecture",
+          "url": "https://www.microsoft.com/en-us/research/blog/solving-a-31-year-old-grand-challenge-in-mathematics-the-kls-conjecture/",
+          "date": "2026-10-21T16:00:00.000Z",
+          "bodyChars": 8849,
+          "excerptChars": 532
+        }
+      ]
+    },
+    {
+      "name": "量子位",
+      "url": "https://www.qbitai.com/feed",
+      "kind": "rss",
+      "count": 10,
+      "dated": 10,
+      "finalUrl": "https://www.qbitai.com/feed",
+      "samples": [
+        {
+          "title": "钛动科技发布行业首个Pro-Agent, Navos Pro定义结果导向的AI for Work | TGC 2026科技增长大会",
+          "url": "https://www.qbitai.com/2026/10/505580.html",
+          "date": "2026-10-27T03:23:55.000Z",
+          "bodyChars": 0,
+          "excerptChars": 59
+        },
+        {
+          "title": "刚刚，Anthropic公开335页招股书：史上最大IPO，史上最亏AI公司",
+          "url": "https://www.qbitai.com/2026/10/505551.html",
+          "date": "2026-10-26T16:06:31.000Z",
+          "bodyChars": 0,
+          "excerptChars": 28
+        }
+      ]
+    },
+    {
+      "name": "DeepSeek GitHub",
+      "url": "https://github.com/deepseek-ai/DeepSeek-V3/releases.atom",
+      "kind": "rss",
+      "count": 1,
+      "dated": 0,
+      "finalUrl": "https://github.com/deepseek-ai/DeepSeek-V3/releases.atom",
+      "samples": [
+        {
+          "title": "v1.0.0",
+          "url": "https://github.com/deepseek-ai/DeepSeek-V3/releases/tag/v1.0.0",
+          "date": null,
+          "bodyChars": 0,
+          "excerptChars": 0
+        }
+      ]
+    },
+    {
+      "name": "机器之心",
+      "url": "https://www.jiqizhixin.com/rss",
+      "kind": "rss",
+      "error": "not an RSS/Atom document"
+    },
+    {
+      "name": "极客公园",
+      "url": "https://www.geekpark.net/rss",
+      "kind": "rss",
+      "count": 30,
+      "dated": 30,
+      "finalUrl": "https://www.geekpark.net/rss",
+      "samples": [
+        {
+          "title": "iPhone Duo 裂屏，是苹果新 CEO 接班后第一次「大考」",
+          "url": "http://www.geekpark.net/news/373008",
+          "date": "2026-10-27T09:24:34.000Z",
+          "bodyChars": 0,
+          "excerptChars": 2000
+        },
+        {
+          "title": "看了招股书，我终于知道为什么 Anthropic 不在乎用户了",
+          "url": "http://www.geekpark.net/news/373006",
+          "date": "2026-10-27T08:55:13.000Z",
+          "bodyChars": 0,
+          "excerptChars": 2000
+        }
+      ]
+    },
+    {
+      "name": "TechCrunch AI",
+      "url": "https://techcrunch.com/category/artificial-intelligence/feed/",
+      "kind": "rss",
+      "count": 20,
+      "dated": 20,
+      "finalUrl": "https://techcrunch.com/category/artificial-intelligence/feed/",
+      "samples": [
+        {
+          "title": "VCs will make billions on Anthropic’s IPO, but Amazon is set to make much (much) more",
+          "url": "https://techcrunch.com/2026/10/27/vcs-will-make-billions-on-anthropics-ipo-but-amazon-is-set-to-make-much-much-more/",
+          "date": "2026-10-28T01:15:28.000Z",
+          "bodyChars": 0,
+          "excerptChars": 83
+        },
+        {
+          "title": "Parents sue OpenAI, alleging GPT-4o coached their daughter off seizure medication",
+          "url": "https://techcrunch.com/2026/10/27/parents-sue-openai-alleging-gpt-4o-coached-their-daughter-off-seizure-medication/",
+          "date": "2026-10-27T23:34:27.000Z",
+          "bodyChars": 0,
+          "excerptChars": 165
+        }
+      ]
+    },
+    {
+      "name": "Simon Willison",
+      "url": "https://simonwillison.net/atom/everything/",
+      "kind": "rss",
+      "count": 30,
+      "dated": 30,
+      "finalUrl": "https://simonwillison.net/atom/everything/",
+      "samples": [
+        {
+          "title": "Game Boy Color on My Conference Badge",
+          "url": "https://simonwillison.net/2026/Oct/27/game-boy-color-on-my-conference-badge/",
+          "date": "2026-10-27T19:34:18.000Z",
+          "bodyChars": 0,
+          "excerptChars": 757
+        },
+        {
+          "title": "GPT-6.1 Terra",
+          "url": "https://simonwillison.net/2026/Oct/26/gpt-61-terra/",
+          "date": "2026-10-26T23:53:07.000Z",
+          "bodyChars": 0,
+          "excerptChars": 2000
+        }
+      ]
+    },
+    {
+      "name": "MIT News AI",
+      "url": "https://news.mit.edu/rss/topic/artificial-intelligence2",
+      "kind": "rss",
+      "count": 50,
+      "dated": 50,
+      "finalUrl": "https://news.mit.edu/rss/topic/artificial-intelligence2",
+      "samples": [
+        {
+          "title": "Making machines that can listen",
+          "url": "https://news.mit.edu/2026/making-machines-that-can-listen-paris-smaragdis-1028",
+          "date": "2026-10-28T04:00:00.000Z",
+          "bodyChars": 9489,
+          "excerptChars": 161
+        },
+        {
+          "title": "Learner collaborates with MIT peers to develop book of AI insights",
+          "url": "https://news.mit.edu/2026/learner-prabha-jha-collaborates-with-mit-peers-to-develop-book-of-ai-insights-1027",
+          "date": "2026-10-27T20:55:00.000Z",
+          "bodyChars": 6591,
+          "excerptChars": 157
+        }
+      ]
+    },
+    {
+      "name": "Google Research",
+      "url": "https://research.google/blog/rss/",
+      "kind": "rss",
+      "count": 100,
+      "dated": 100,
+      "finalUrl": "https://research.google/blog/rss/",
+      "samples": [
+        {
+          "title": "The sleep framework: A new way for LLMs to retain knowledge in continual learning",
+          "url": "https://research.google/blog/the-sleep-framework-a-new-way-for-llms-to-retain-knowledge-in-continual-learning/",
+          "date": "2026-10-27T17:35:00.000Z",
+          "bodyChars": 0,
+          "excerptChars": 20
+        },
+        {
+          "title": "Bringing foundational models to the front lines of TB screening",
+          "url": "https://research.google/blog/bringing-foundational-models-to-the-front-lines-of-tb-screening/",
+          "date": "2026-10-23T18:51:33.000Z",
+          "bodyChars": 0,
+          "excerptChars": 13
+        }
+      ]
+    },
+    {
+      "name": "The Decoder",
+      "url": "https://the-decoder.com/feed/",
+      "kind": "rss",
+      "count": 10,
+      "dated": 10,
+      "finalUrl": "https://the-decoder.com/feed/",
+      "samples": [
+        {
+          "title": "Alibaba's latest Qwen models routed some requests through company servers, researchers find",
+          "url": "https://the-decoder.com/alibabas-latest-qwen-models-routed-some-requests-through-company-servers-researchers-find/",
+          "date": "2026-10-27T19:45:49.000Z",
+          "bodyChars": 0,
+          "excerptChars": 446
+        },
+        {
+          "title": "Google Deepmind's Genie 4 puts a modern spin on agent designs that predate LLMs",
+          "url": "https://the-decoder.com/google-deepminds-genie-4-puts-a-modern-spin-on-agent-designs-that-predate-llms/",
+          "date": "2026-10-27T17:25:09.000Z",
+          "bodyChars": 0,
+          "excerptChars": 430
+        }
+      ]
+    },
+    {
+      "name": "Qwen 新官网",
+      "url": "https://qwen.ai/blog",
+      "kind": "web",
+      "status": 200,
+      "finalUrl": "https://qwen.ai/blog",
+      "title": "Qwen",
+      "bytes": 92469
+    },
+    {
+      "name": "Anthropic",
+      "url": "https://www.anthropic.com/news",
+      "kind": "web",
+      "status": 200,
+      "finalUrl": "https://www.anthropic.com/news",
+      "title": "Newsroom \\ Anthropic",
+      "bytes": 412300
+    },
+    {
+      "name": "DeepSeek API",
+      "url": "https://api-docs.deepseek.com/updates",
+      "kind": "web",
+      "status": 200,
+      "finalUrl": "https://api-docs.deepseek.com/updates/",
+      "title": "Change Log | DeepSeek API Docs",
+      "bytes": 52211
+    },
+    {
+      "name": "量子位官网",
+      "url": "https://www.qbitai.com/",
+      "kind": "web",
+      "status": 200,
+      "finalUrl": "https://www.qbitai.com/",
+      "title": "量子位 – 追踪人工智能新趋势，报道科技行业新突破",
+      "bytes": 64105
+    },
+    {
+      "name": "上海AI Lab",
+      "url": "https://www.shlab.org.cn/news",
+      "kind": "web",
+      "status": 404,
+      "finalUrl": "https://www.shlab.org.cn/news",
+      "title": "上海人工智能实验室",
+      "bytes": 25421
+    },
+    {
+      "name": "智源研究院",
+      "url": "https://www.baai.ac.cn/",
+      "kind": "web",
+      "status": 200,
+      "finalUrl": "https://www.baai.ac.cn/zh-cn/",
+      "title": "BAAI智源研究院",
+      "bytes": 1235
+    },
+    {
+      "name": "Hugging Face",
+      "url": "https://huggingface.co/blog/feed.xml",
+      "kind": "rss",
+      "error": "fetch failed"
+    }
+  ],
+  "verifiedCandidates": [
+    {
+      "name": "DeepSeek 更新日志",
+      "kind": "web_list",
+      "config": {
+        "url": "https://api-docs.deepseek.com/zh-cn/updates",
+        "parseMode": "docusaurus_changelog",
+        "preserveUrlFragment": true,
+        "publishedAtUtcOffset": "+08:00"
+      },
+      "count": 24,
+      "dated": 24,
+      "samples": [
+        {
+          "title": "开放自研搜索 API",
+          "url": "https://api-docs.deepseek.com/zh-cn/updates/#开放自研搜索-api",
+          "date": "2026-10-16T16:00:00.000Z",
+          "inlineBodyChars": 217,
+          "extractedBodyChars": 0
+        },
+        {
+          "title": "DeepSeek-V4.1-Flash-1017 更新",
+          "url": "https://api-docs.deepseek.com/zh-cn/updates/#deepseek-v41-flash-1017-更新",
+          "date": "2026-10-16T16:00:00.000Z",
+          "inlineBodyChars": 761,
+          "extractedBodyChars": 0
+        }
+      ],
+      "enabled": false,
+      "site_fulltext": false,
+      "syndicate_fulltext": false
+    },
+    {
+      "name": "上海AI Lab",
+      "kind": "web_list",
+      "config": {
+        "url": "https://www.shlab.org.cn/info",
+        "parseMode": "html",
+        "itemSelector": ".itembox > a[href^=\"/news/\"]",
+        "titleSelector": "h2",
+        "publishedAtSelector": ".u-time",
+        "publishedAtUtcOffset": "+08:00",
+        "allowUrlPrefixes": [
+          "https://www.shlab.org.cn/news/"
+        ]
+      },
+      "count": 7,
+      "dated": 7,
+      "samples": [
+        {
+          "title": "办大赛、聚人才、促合作，上海AI实验室携手产学研协同创新，推动“人工智能+”行动落地见效",
+          "url": "https://www.shlab.org.cn/news/5444310",
+          "date": "2026-10-26T16:00:00.000Z",
+          "inlineBodyChars": 0,
+          "extractedBodyChars": 2847,
+          "bodyDate": null,
+          "via": "readability"
+        },
+        {
+          "title": "递归自我改进（RSI）新进展！通专融合智能体书生-A1.5上线，验证真实科学场景驱动模型自进化新路径",
+          "url": "https://www.shlab.org.cn/news/5444309",
+          "date": "2026-10-25T16:00:00.000Z",
+          "inlineBodyChars": 0,
+          "extractedBodyChars": 3082,
+          "bodyDate": null,
+          "via": "readability"
+        }
+      ],
+      "enabled": false,
+      "site_fulltext": false,
+      "syndicate_fulltext": false
+    },
+    {
+      "name": "OpenAI",
+      "kind": "rss",
+      "config": {
+        "feedUrl": "https://openai.com/news/rss.xml"
+      },
+      "count": 1331,
+      "dated": 1331,
+      "samples": [
+        {
+          "title": "Retell uses OpenAI models to help power 100M monthly calls",
+          "url": "https://openai.com/index/retell-ai",
+          "date": "2026-10-27T15:00:00.000Z",
+          "inlineBodyChars": 0,
+          "extractedBodyChars": 0
+        },
+        {
+          "title": "OpenAI expands partnership with Oracle to bring its apps to ChatGPT",
+          "url": "https://openai.com/index/oracle-apps-in-chatgpt",
+          "date": "2026-10-27T07:00:00.000Z",
+          "inlineBodyChars": 0,
+          "extractedBodyChars": 0
+        }
+      ],
+      "enabled": false,
+      "site_fulltext": false,
+      "syndicate_fulltext": false
+    },
+    {
+      "name": "Anthropic",
+      "kind": "web_list",
+      "config": {
+        "url": "https://www.anthropic.com/news",
+        "parseMode": "html",
+        "itemSelector": "li[data-listing-row]",
+        "linkSelector": "a[class*=\"__title-link\"]",
+        "titleSelector": "h3",
+        "publishedAtSelector": "time",
+        "publishedAtUtcOffset": "+00:00"
+      },
+      "count": 24,
+      "dated": 24,
+      "samples": [
+        {
+          "title": "Early progress on accelerating drug development with Claude",
+          "url": "https://www.anthropic.com/research/early-progress-drug-development",
+          "date": "2026-10-27T00:00:00.000Z",
+          "inlineBodyChars": 0,
+          "extractedBodyChars": 11588,
+          "bodyDate": "2026-10-27T00:00:00.000Z",
+          "via": "readability",
+          "publicationTime": "2026-10-27"
+        },
+        {
+          "title": "Expanding our partnership with GSA to bring Claude to all levels of government",
+          "url": "https://www.anthropic.com/news/expanding-partnership-gsa",
+          "date": "2026-10-27T00:00:00.000Z",
+          "inlineBodyChars": 0,
+          "extractedBodyChars": 3967,
+          "bodyDate": "2026-10-27T00:00:00.000Z",
+          "via": "readability",
+          "publicationTime": "2026-10-27"
+        }
+      ],
+      "enabled": false,
+      "site_fulltext": false,
+      "syndicate_fulltext": false
+    },
+    {
+      "name": "智谱",
+      "kind": "web_list",
+      "config": {
+        "url": "https://www.zhipuai.cn/zh/news",
+        "parseMode": "html",
+        "itemSelector": "a.group[href^=\"/zh/news/\"]",
+        "titleSelector": "h3",
+        "publishedAtRegex": "(20\\d{2}/\\d{2}/\\d{2})",
+        "publishedAtUtcOffset": "+08:00",
+        "allowUrlPrefixes": [
+          "https://www.zhipuai.cn/zh/news/"
+        ]
+      },
+      "count": 15,
+      "dated": 15,
+      "samples": [
+        {
+          "title": "智谱首份业绩报告发布，探索AGI智能上界",
+          "url": "https://www.zhipuai.cn/zh/news/152",
+          "date": "2026-03-30T16:00:00.000Z",
+          "inlineBodyChars": 0,
+          "extractedBodyChars": 343,
+          "bodyDate": null,
+          "via": "readability"
+        },
+        {
+          "title": "智谱（02513.HK）公布2025年度业绩发布会安排",
+          "url": "https://www.zhipuai.cn/zh/news/151",
+          "date": "2026-03-29T16:00:00.000Z",
+          "inlineBodyChars": 0,
+          "extractedBodyChars": 395,
+          "bodyDate": null,
+          "via": "readability"
+        }
+      ],
+      "enabled": false,
+      "site_fulltext": false,
+      "syndicate_fulltext": false
+    },
+    {
+      "name": "DeepMind",
+      "kind": "rss",
+      "config": {
+        "feedUrl": "https://deepmind.google/blog/rss.xml"
+      },
+      "count": 100,
+      "dated": 100,
+      "samples": [
+        {
+          "title": "Genie 4: A new generation of world simulation",
+          "url": "https://deepmind.google/blog/genie-4-a-new-generation-of-world-simulation/",
+          "date": "2026-10-27T16:01:38.000Z",
+          "inlineBodyChars": 0,
+          "extractedBodyChars": 11998,
+          "bodyDate": "2026-10-27T16:13:00.000Z",
+          "via": "readability"
+        },
+        {
+          "title": "Beyond tree cover: mapping the world’s forest types",
+          "url": "https://deepmind.google/blog/beyond-tree-cover-mapping-the-worlds-forest-types/",
+          "date": "2026-10-22T14:30:24.000Z",
+          "inlineBodyChars": 0,
+          "extractedBodyChars": 8528,
+          "bodyDate": "2026-10-22T14:30:00.000Z",
+          "via": "readability"
+        }
+      ],
+      "enabled": false,
+      "site_fulltext": false,
+      "syndicate_fulltext": false
+    },
+    {
+      "name": "MIT News AI",
+      "kind": "rss",
+      "config": {
+        "feedUrl": "https://news.mit.edu/rss/topic/artificial-intelligence2"
+      },
+      "count": 50,
+      "dated": 50,
+      "samples": [
+        {
+          "title": "Making machines that can listen",
+          "url": "https://news.mit.edu/2026/making-machines-that-can-listen-paris-smaragdis-1028",
+          "date": "2026-10-28T04:00:00.000Z",
+          "inlineBodyChars": 9489,
+          "extractedBodyChars": 0
+        },
+        {
+          "title": "Learner collaborates with MIT peers to develop book of AI insights",
+          "url": "https://news.mit.edu/2026/learner-prabha-jha-collaborates-with-mit-peers-to-develop-book-of-ai-insights-1027",
+          "date": "2026-10-27T20:55:00.000Z",
+          "inlineBodyChars": 6591,
+          "extractedBodyChars": 0
+        }
+      ],
+      "enabled": false,
+      "site_fulltext": false,
+      "syndicate_fulltext": false
+    },
+    {
+      "name": "Google Research",
+      "kind": "rss",
+      "config": {
+        "feedUrl": "https://research.google/blog/rss/"
+      },
+      "count": 100,
+      "dated": 100,
+      "samples": [
+        {
+          "title": "The sleep framework: A new way for LLMs to retain knowledge in continual learning",
+          "url": "https://research.google/blog/the-sleep-framework-a-new-way-for-llms-to-retain-knowledge-in-continual-learning/",
+          "date": "2026-10-27T17:35:00.000Z",
+          "inlineBodyChars": 0,
+          "extractedBodyChars": 9424,
+          "bodyDate": null,
+          "via": "readability"
+        },
+        {
+          "title": "Bringing foundational models to the front lines of TB screening",
+          "url": "https://research.google/blog/bringing-foundational-models-to-the-front-lines-of-tb-screening/",
+          "date": "2026-10-23T18:51:33.000Z",
+          "inlineBodyChars": 0,
+          "extractedBodyChars": 9483,
+          "bodyDate": null,
+          "via": "readability"
+        }
+      ],
+      "enabled": false,
+      "site_fulltext": false,
+      "syndicate_fulltext": false
+    },
+    {
+      "name": "量子位",
+      "kind": "rss",
+      "config": {
+        "feedUrl": "https://www.qbitai.com/feed"
+      },
+      "count": 10,
+      "dated": 10,
+      "samples": [
+        {
+          "title": "钛动科技发布行业首个Pro-Agent, Navos Pro定义结果导向的AI for Work | TGC 2026科技增长大会",
+          "url": "https://www.qbitai.com/2026/10/505580.html",
+          "date": "2026-10-27T03:23:55.000Z",
+          "inlineBodyChars": 0,
+          "extractedBodyChars": 3372,
+          "bodyDate": null,
+          "via": "readability"
+        },
+        {
+          "title": "刚刚，Anthropic公开335页招股书：史上最大IPO，史上最亏AI公司",
+          "url": "https://www.qbitai.com/2026/10/505551.html",
+          "date": "2026-10-26T16:06:31.000Z",
+          "inlineBodyChars": 0,
+          "extractedBodyChars": 7913,
+          "bodyDate": null,
+          "via": "readability"
+        }
+      ],
+      "enabled": false,
+      "site_fulltext": false,
+      "syndicate_fulltext": false
+    },
+    {
+      "name": "Microsoft Research",
+      "kind": "rss",
+      "config": {
+        "feedUrl": "https://www.microsoft.com/en-us/research/feed/"
+      },
+      "count": 10,
+      "dated": 10,
+      "samples": [
+        {
+          "title": "Flint-interactive: A language for creating interactive data visualizations",
+          "url": "https://www.microsoft.com/en-us/research/blog/flint-interactive-a-language-for-creating-interactive-data-visualizations/",
+          "date": "2026-10-22T16:00:00.000Z",
+          "inlineBodyChars": 7997,
+          "extractedBodyChars": 0
+        },
+        {
+          "title": "Solving a 31-year-old grand challenge in mathematics – the KLS conjecture",
+          "url": "https://www.microsoft.com/en-us/research/blog/solving-a-31-year-old-grand-challenge-in-mathematics-the-kls-conjecture/",
+          "date": "2026-10-21T16:00:00.000Z",
+          "inlineBodyChars": 8849,
+          "extractedBodyChars": 0
+        }
+      ],
+      "enabled": false,
+      "site_fulltext": false,
+      "syndicate_fulltext": false
+    },
+    {
+      "name": "TechCrunch AI",
+      "kind": "rss",
+      "config": {
+        "feedUrl": "https://techcrunch.com/category/artificial-intelligence/feed/"
+      },
+      "count": 20,
+      "dated": 20,
+      "samples": [
+        {
+          "title": "VCs will make billions on Anthropic’s IPO, but Amazon is set to make much (much) more",
+          "url": "https://techcrunch.com/2026/10/27/vcs-will-make-billions-on-anthropics-ipo-but-amazon-is-set-to-make-much-much-more/",
+          "date": "2026-10-28T01:15:28.000Z",
+          "inlineBodyChars": 0,
+          "extractedBodyChars": 4535,
+          "bodyDate": "2026-10-28T01:15:28.000Z",
+          "via": "readability"
+        },
+        {
+          "title": "Parents sue OpenAI, alleging GPT-4o coached their daughter off seizure medication",
+          "url": "https://techcrunch.com/2026/10/27/parents-sue-openai-alleging-gpt-4o-coached-their-daughter-off-seizure-medication/",
+          "date": "2026-10-27T23:34:27.000Z",
+          "inlineBodyChars": 0,
+          "extractedBodyChars": 6515,
+          "bodyDate": "2026-10-27T23:34:27.000Z",
+          "via": "readability"
+        }
+      ],
+      "enabled": false,
+      "site_fulltext": false,
+      "syndicate_fulltext": false
+    },
+    {
+      "name": "Simon Willison",
+      "kind": "rss",
+      "config": {
+        "feedUrl": "https://simonwillison.net/atom/everything/"
+      },
+      "count": 30,
+      "dated": 30,
+      "samples": [
+        {
+          "title": "Game Boy Color on My Conference Badge",
+          "url": "https://simonwillison.net/2026/Oct/27/game-boy-color-on-my-conference-badge/",
+          "date": "2026-10-27T19:34:18.000Z",
+          "inlineBodyChars": 0,
+          "extractedBodyChars": 696,
+          "bodyDate": null,
+          "via": "readability"
+        },
+        {
+          "title": "GPT-6.1 Terra",
+          "url": "https://simonwillison.net/2026/Oct/26/gpt-61-terra/",
+          "date": "2026-10-26T23:53:07.000Z",
+          "inlineBodyChars": 0,
+          "extractedBodyChars": 2070,
+          "bodyDate": null,
+          "via": "readability"
+        }
+      ],
+      "enabled": false,
+      "site_fulltext": false,
+      "syndicate_fulltext": false
+    },
+    {
+      "name": "The Decoder",
+      "kind": "rss",
+      "config": {
+        "feedUrl": "https://the-decoder.com/feed/"
+      },
+      "count": 10,
+      "dated": 10,
+      "samples": [
+        {
+          "title": "Alibaba's latest Qwen models routed some requests through company servers, researchers find",
+          "url": "https://the-decoder.com/alibabas-latest-qwen-models-routed-some-requests-through-company-servers-researchers-find/",
+          "date": "2026-10-27T19:45:49.000Z",
+          "inlineBodyChars": 0,
+          "extractedBodyChars": 4677,
+          "bodyDate": "2026-10-27T19:45:49.000Z",
+          "via": "readability"
+        },
+        {
+          "title": "Google Deepmind's Genie 4 puts a modern spin on agent designs that predate LLMs",
+          "url": "https://the-decoder.com/google-deepminds-genie-4-puts-a-modern-spin-on-agent-designs-that-predate-llms/",
+          "date": "2026-10-27T17:25:09.000Z",
+          "inlineBodyChars": 0,
+          "extractedBodyChars": 3434,
+          "bodyDate": "2026-10-27T17:25:09.000Z",
+          "via": "readability"
+        }
+      ],
+      "enabled": false,
+      "site_fulltext": false,
+      "syndicate_fulltext": false
+    },
+    {
+      "name": "BAIR",
+      "kind": "rss",
+      "config": {
+        "feedUrl": "https://bair.berkeley.edu/blog/feed.xml"
+      },
+      "count": 10,
+      "dated": 10,
+      "samples": [
+        {
+          "title": "From CUDA to MLX: How K-Search Brings Decades of Kernel Expertise to Apple Silicon",
+          "url": "http://bair.berkeley.edu/blog/2026/07/29/cuda-to-mlx-k-search/",
+          "date": "2026-07-29T09:00:00.000Z",
+          "inlineBodyChars": 0,
+          "extractedBodyChars": 15743,
+          "bodyDate": null,
+          "via": "readability"
+        },
+        {
+          "title": "Teaching LLMs to Update Beliefs for Efficient Long-Horizon Interaction",
+          "url": "http://bair.berkeley.edu/blog/2026/07/26/abbel/",
+          "date": "2026-07-26T09:00:00.000Z",
+          "inlineBodyChars": 0,
+          "extractedBodyChars": 12333,
+          "bodyDate": null,
+          "via": "readability"
+        }
+      ],
+      "enabled": false,
+      "site_fulltext": false,
+      "syndicate_fulltext": false
+    },
+    {
+      "name": "极客公园",
+      "kind": "rss",
+      "config": {
+        "feedUrl": "https://www.geekpark.net/rss"
+      },
+      "count": 30,
+      "dated": 30,
+      "samples": [
+        {
+          "title": "iPhone Duo 裂屏，是苹果新 CEO 接班后第一次「大考」",
+          "url": "http://www.geekpark.net/news/373008",
+          "date": "2026-10-27T09:24:34.000Z",
+          "inlineBodyChars": 0,
+          "extractedBodyChars": 4319,
+          "bodyDate": null,
+          "via": "readability"
+        },
+        {
+          "title": "看了招股书，我终于知道为什么 Anthropic 不在乎用户了",
+          "url": "http://www.geekpark.net/news/373006",
+          "date": "2026-10-27T08:55:13.000Z",
+          "inlineBodyChars": 0,
+          "extractedBodyChars": 4169,
+          "bodyDate": null,
+          "via": "readability"
+        }
+      ],
+      "enabled": false,
+      "site_fulltext": false,
+      "syndicate_fulltext": false
+    }
+  ],
+  "datePolicy": "Chinese date-only values +08:00; Anthropic calendar dates +00:00 and date precision, not exact publication instants."
+}

@@ -1,0 +1,67 @@
+{
+  "$comment": "创建前的历史禁用配置，仅供核对配套报告；不代表当前运行状态或自动导入建议。",
+  "sources": [
+    {
+      "id": "ai-rss-arxiv-rag-cs-cl",
+      "name": "arXiv 论文摘要 · RAG 与检索评测 · cs.CL",
+      "kind": "rss",
+      "config": {
+        "feedUrl": "https://export.arxiv.org/api/query?search_query=cat%3Acs.CL+AND+%28ti%3A%22retrieval+augmented%22+OR+abs%3A%22retrieval+augmented%22+OR+ti%3A%22retrieval-augmented%22+OR+abs%3A%22retrieval-augmented%22+OR+%28ti%3ARAG+AND+%28abs%3Aretrieval+OR+abs%3Ageneration%29%29+OR+%28%28ti%3Aretrieval+OR+abs%3A%22retrieval+evaluation%22%29+AND+%28ti%3Aevaluation+OR+ti%3Abenchmark+OR+abs%3A%22retrieval+evaluation%22+OR+abs%3A%22retrieval+benchmark%22%29%29%29&start=0&max_results=100&sortBy=submittedDate&sortOrder=descending",
+        "sortByPublishedAt": true,
+        "publishedAfter": "2026-10-26T00:00:00.000Z",
+        "allowUrlPrefixes": [
+          "https://arxiv.org/abs/",
+          "http://arxiv.org/abs/"
+        ],
+        "_aihot": {
+          "initialBackfillLimit": 3,
+          "initialBackfillMonths": 1
+        }
+      },
+      "tier": "T1",
+      "enabled": false,
+      "participation_mode": "editorial",
+      "interval_minutes": 180,
+      "tags": [
+        "研究",
+        "论文",
+        "预印本",
+        "仅摘要"
+      ],
+      "owner_entity_id": null,
+      "site_fulltext": false,
+      "syndicate_fulltext": false
+    },
+    {
+      "id": "ai-rss-arxiv-rag-cs-ai",
+      "name": "arXiv 论文摘要 · RAG 与检索评测 · cs.AI",
+      "kind": "rss",
+      "config": {
+        "feedUrl": "https://export.arxiv.org/api/query?search_query=cat%3Acs.AI+AND+%28ti%3A%22retrieval+augmented%22+OR+abs%3A%22retrieval+augmented%22+OR+ti%3A%22retrieval-augmented%22+OR+abs%3A%22retrieval-augmented%22+OR+%28ti%3ARAG+AND+%28abs%3Aretrieval+OR+abs%3Ageneration%29%29+OR+%28%28ti%3Aretrieval+OR+abs%3A%22retrieval+evaluation%22%29+AND+%28ti%3Aevaluation+OR+ti%3Abenchmark+OR+abs%3A%22retrieval+evaluation%22+OR+abs%3A%22retrieval+benchmark%22%29%29%29&start=0&max_results=100&sortBy=submittedDate&sortOrder=descending",
+        "sortByPublishedAt": true,
+        "publishedAfter": "2026-10-26T00:00:00.000Z",
+        "allowUrlPrefixes": [
+          "https://arxiv.org/abs/",
+          "http://arxiv.org/abs/"
+        ],
+        "_aihot": {
+          "initialBackfillLimit": 3,
+          "initialBackfillMonths": 1
+        }
+      },
+      "tier": "T1",
+      "enabled": false,
+      "participation_mode": "editorial",
+      "interval_minutes": 180,
+      "tags": [
+        "研究",
+        "论文",
+        "预印本",
+        "仅摘要"
+      ],
+      "owner_entity_id": null,
+      "site_fulltext": false,
+      "syndicate_fulltext": false
+    }
+  ]
+}
